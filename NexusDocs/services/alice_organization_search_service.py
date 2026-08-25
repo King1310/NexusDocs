@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import unicodedata
 
 from domain.entities.organization import Organization
 from domain.enums.organization_type import OrganizationType
@@ -75,7 +76,11 @@ class AliceOrganizationSearchService:
 +7 (981) 408-03-08
 эл. почта: kospol078@mail.ru
 
-ФИО руководителей и других людей указывать не нужно. Сделай строго по шаблону: кому и полное название организации, затем полный почтовый адрес с индексом, максимум два телефона и электронная почта. Для военного комиссариата, военной комендатуры и пункта отбора на военную службу по контракту электронную почту можно не указывать. Не сокращай названия организаций и должностей. Не пиши пояснения, предупреждения, степень уверенности и ссылки.
+ФИО руководителей и других людей указывать не нужно. Сделай строго по шаблону: кому и название организации, затем полный почтовый адрес с индексом, максимум два телефона и электронная почта. Для военного комиссариата, военной комендатуры и пункта отбора на военную службу по контракту электронную почту можно не указывать. Должности не сокращай. В названиях организаций используй только официальные общепринятые сокращения, чтобы шапки были компактными: например, ГБУЗ, ГАУЗ, ГКБ, ЦРБ, ЦГБ, КОБ, ОКБ. Не придумывай неофициальные сокращения. Не пиши пояснения, предупреждения, степень уверенности и ссылки.
+
+ВАЖНО: для шапок 3, 4, 5, 6, 7 и 9 строка «эл. почта:» обязательна. Если электронная почта ещё не найдена, продолжай интернет-поиск и не завершай ответ. Нельзя пропускать электронную почту сразу во всех шапках. Без электронной почты допускаются только шапки 1, 2 и 8.
+
+ВАЖНО: строка «тел.:» и хотя бы один реальный телефон обязательны во всех девяти шапках без исключений. Можно указать один или максимум два телефона. Если телефон организации ещё не найден, продолжай интернет-поиск и не завершай ответ.
 
 Нужно ровно 9 шапок и строго в этом порядке:
 
@@ -88,6 +93,8 @@ class AliceOrganizationSearchService:
 7. главе администрации, отвечающей за указанный адрес, без ФИО главы;
 8. в пункт отбора на военную службу по контракту;
 9. председателю территориальной избирательной комиссии.
+
+Перед строкой [[NEXUSDOCS_END]] обязательно проверь: в ответе должно быть девять строк «тел.:» и минимум шесть строк «эл. почта:» — в шапках 3, 4, 5, 6, 7 и 9.
 
 Начни ответ отдельной строкой [[NEXUSDOCS_BEGIN]], закончи отдельной строкой [[NEXUSDOCS_END]]. Каждую шапку начинай отдельной строкой только с номера вида «1)», «2)» и так далее. После номера сразу с новой строки пиши саму шапку. Никакого текста до, после или между шапками не добавляй.'''
         return AliceSearchRequest(prompt=prompt, public_address=public_address)
@@ -165,7 +172,40 @@ class AliceOrganizationSearchService:
         subject_address: Address,
     ) -> FreeSearchOutcome:
         outcome = cls.parse_response(response_text)
-        return cls.validate_outcome_for_address(outcome, subject_address)
+        outcome = cls.validate_outcome_for_address(outcome, subject_address)
+        return cls.validate_required_contacts(outcome)
+
+    @classmethod
+    def validate_required_contacts(
+        cls,
+        outcome: FreeSearchOutcome,
+    ) -> FreeSearchOutcome:
+        """Reject an Alice set that would otherwise open the manual editor."""
+
+        problems: list[str] = []
+        email_optional = cls._email_optional_types()
+        for organization in outcome.organizations:
+            missing: list[str] = []
+            if not organization.phones:
+                missing.append("телефон")
+            if (
+                organization.organization_type not in email_optional
+                and not organization.email
+            ):
+                missing.append("электронная почта")
+            if missing:
+                problems.append(
+                    f"{organization.organization_type.value}: "
+                    + ", ".join(missing)
+                )
+        if problems:
+            raise AliceResponseError(
+                "Алиса не указала обязательные контакты — "
+                + "; ".join(problems)
+                + ". Повторите поиск: минимум один телефон нужен для "
+                "каждой шапки."
+            )
+        return outcome
 
     @classmethod
     def validate_outcome_for_address(
@@ -341,7 +381,8 @@ class AliceOrganizationSearchService:
         postal_address = " ".join(lines[address_index:contact_index]).strip(" ,")
         contact_text = "\n".join(lines[contact_index:])
         phones = cls._phones(contact_text)
-        email_match = _EMAIL_PATTERN.search(contact_text)
+        email_text = cls._normalized_email_text(contact_text)
+        email_match = _EMAIL_PATTERN.search(email_text)
         email = email_match.group(0) if email_match else ""
 
         missing: list[str] = []
@@ -378,11 +419,45 @@ class AliceOrganizationSearchService:
 
     @staticmethod
     def _clean_text(value: str) -> str:
-        return (
+        normalized_characters: list[str] = []
+        for character in value:
+            category = unicodedata.category(character)
+            if category == "Cf":
+                continue
+            if category == "Zs":
+                normalized_characters.append(" ")
+            elif category == "Pd" or character == "−":
+                normalized_characters.append("-")
+            elif character == "＋":
+                normalized_characters.append("+")
+            else:
+                normalized_characters.append(character)
+        value = "".join(normalized_characters)
+        value = (
             value.replace("\u00a0", " ")
-            .replace("\u200b", "")
             .replace("\r\n", "\n")
             .replace("\r", "\n")
+        )
+        value = re.sub(
+            r"\[\[\s*NEXUSDOCS\s*_\s*BEGIN\s*\]\]",
+            _BEGIN_MARKER,
+            value,
+            flags=re.IGNORECASE,
+        )
+        return re.sub(
+            r"\[\[\s*NEXUSDOCS\s*_\s*END\s*\]\]",
+            _END_MARKER,
+            value,
+            flags=re.IGNORECASE,
+        )
+
+    @classmethod
+    def has_completed_answer(cls, value: str) -> bool:
+        """Recognize Alice's standalone end marker despite web formatting."""
+
+        return any(
+            line.strip() == _END_MARKER
+            for line in cls._clean_text(value).splitlines()
         )
 
     @staticmethod
@@ -429,11 +504,29 @@ class AliceOrganizationSearchService:
     @staticmethod
     def _phones(value: str) -> tuple[str, ...]:
         phones: list[str] = []
-        for match in _PHONE_PATTERN.finditer(value):
+        normalized = AliceOrganizationSearchService._clean_text(value)
+        matches = list(_PHONE_PATTERN.finditer(normalized))
+        if not matches:
+            # Alice's clipboard sometimes uses punctuation outside the usual
+            # phone alphabet. Recognize the number by its digit structure.
+            matches = list(
+                re.finditer(
+                    r"(?<!\d)(?:\+\s*7|8)(?:[^\d\n]*\d){10}(?!\d)",
+                    normalized,
+                )
+            )
+        for match in matches:
             phone = " ".join(match.group(0).split()).strip(" ,;.")
             if phone not in phones:
                 phones.append(phone)
         return tuple(phones[:2])
+
+    @staticmethod
+    def _normalized_email_text(value: str) -> str:
+        value = AliceOrganizationSearchService._clean_text(value)
+        value = value.replace("\\@", "@").replace("\\.", ".")
+        value = re.sub(r"\s*@\s*", "@", value)
+        return re.sub(r"(?<=\w)\s*\.\s*(?=\w)", ".", value)
 
     @staticmethod
     def _email_optional_types() -> frozenset[OrganizationType]:

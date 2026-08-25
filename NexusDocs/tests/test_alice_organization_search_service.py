@@ -122,9 +122,36 @@ def test_prompt_uses_address_without_apartment_and_demands_nine_headers():
     assert "собственные официальные реквизиты" in request.prompt
     assert "Не подставляй адрес субъекта как адрес организации" in request.prompt
     assert "ФИО руководителей и других людей" in request.prompt
+    assert "для шапок 3, 4, 5, 6, 7 и 9" in request.prompt
+    assert "Без электронной почты допускаются только шапки 1, 2 и 8" in request.prompt
+    assert "ГБУЗ, ГАУЗ, ГКБ, ЦРБ, ЦГБ, КОБ, ОКБ" in request.prompt
+    assert "обязательны во всех девяти шапках" in request.prompt
+    assert "девять строк «тел.:»" in request.prompt
     assert "Нужно ровно 9 шапок" in request.prompt
     assert "[[NEXUSDOCS_BEGIN]]" in request.prompt
     assert "[[NEXUSDOCS_END]]" in request.prompt
+
+
+def test_completed_marker_ignores_invisible_web_characters():
+    text = "ответ\n[[NEXUSDOCS_\u2060END]]\n"
+
+    assert AliceOrganizationSearchService.has_completed_answer(text)
+
+
+def test_contacts_accept_alice_clipboard_typography():
+    contact_text = (
+        "тел.: +7\u202f(496)\u202f542‑05‑51, +7 (496) 542−16−16\n"
+        "эл. почта: spcgb\\@mail . ru"
+    )
+
+    assert AliceOrganizationSearchService._phones(contact_text) == (
+        "+7 (496) 542-05-51",
+        "+7 (496) 542-16-16",
+    )
+    normalized_email = AliceOrganizationSearchService._normalized_email_text(
+        contact_text
+    )
+    assert "spcgb@mail.ru" in normalized_email
 
 
 def test_parser_builds_all_nine_organizations_in_protocol_order():
@@ -262,6 +289,20 @@ def test_parser_marks_missing_required_email_for_review():
 
     assert outcome.unresolved_types == (OrganizationType.PSYCHIATRY,)
     assert outcome.organizations[3].verification_status == "needs_review"
+
+
+def test_address_parser_rejects_missing_required_contacts():
+    response = _alice_answer().replace(
+        "тел.: +7 (81459) 5-15-57,\n+7 (981) 408-03-08",
+        "",
+        1,
+    )
+
+    with pytest.raises(AliceResponseError, match="обязательные контакты"):
+        AliceOrganizationSearchService.parse_response_for_address(
+            response,
+            _address(),
+        )
 
 
 def test_parser_waits_for_complete_marked_answer():

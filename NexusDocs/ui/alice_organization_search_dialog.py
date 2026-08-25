@@ -72,15 +72,20 @@ class AliceOrganizationSearchDialog(QDialog):
         buttons = QHBoxLayout()
         self.copy_button = QPushButton("Скопировать строгий запрос")
         self.retry_button = QPushButton("Отправить заново")
+        self.collect_button = QPushButton("Забрать готовые шапки")
         self.cancel_button = QPushButton("Отмена")
         buttons.addWidget(self.copy_button)
         buttons.addWidget(self.retry_button)
+        buttons.addWidget(self.collect_button)
         buttons.addStretch()
         buttons.addWidget(self.cancel_button)
         layout.addLayout(buttons)
 
         self.copy_button.clicked.connect(self._copy_prompt)
         self.retry_button.clicked.connect(self._retry)
+        self.collect_button.clicked.connect(
+            lambda _checked=False: self._poll_page(force=True)
+        )
         self.cancel_button.clicked.connect(self.reject)
         self.web_view.loadFinished.connect(self._on_load_finished)
 
@@ -192,61 +197,188 @@ class AliceOrganizationSearchDialog(QDialog):
         )
         self.poll_timer.start()
 
-    def _poll_page(self) -> None:
-        self.page.runJavaScript(
-            """
+    def _poll_page(self, force: bool = False) -> None:
+        if force:
+            self.status_label.setText("Считываю готовый ответ Алисы…")
+        script = """
             (() => {
-                if (!document.body) return '';
-                const clone = document.body.cloneNode(true);
-                clone.querySelectorAll('ol').forEach(list => {
-                    let nextNumber = Number(list.getAttribute('start') || 1);
-                    Array.from(list.children).forEach(item => {
-                        if (item.tagName !== 'LI') return;
-                        const valueAttribute = item.getAttribute('value');
-                        const explicit = valueAttribute === null
-                            ? Number.NaN
-                            : Number(valueAttribute);
-                        const number = Number.isFinite(explicit)
-                            ? explicit
-                            : nextNumber;
-                        const marker = document.createElement('span');
-                        marker.textContent = `${number})\n`;
-                        item.prepend(marker);
-                        nextNumber = number + 1;
+                if (!document.body) {
+                    return {text: '', generating: false, completed: false,
+                        error: 'document.body отсутствует'};
+                }
+                try {
+                    const rawText = document.body.innerText
+                        || document.body.textContent || '';
+                    let text = rawText;
+                    try {
+                        const clone = document.body.cloneNode(true);
+                        clone.querySelectorAll('ol').forEach(list => {
+                            let nextNumber = Number(
+                                list.getAttribute('start') || 1
+                            );
+                            Array.from(list.children).forEach(item => {
+                                if (item.tagName !== 'LI') return;
+                                const valueAttribute = item.getAttribute('value');
+                                const explicit = valueAttribute === null
+                                    ? Number.NaN
+                                    : Number(valueAttribute);
+                                const number = Number.isFinite(explicit)
+                                    ? explicit
+                                    : nextNumber;
+                                const marker = document.createElement('span');
+                                marker.textContent = `${number})\n`;
+                                item.prepend(marker);
+                                nextNumber = number + 1;
+                            });
+                        });
+                        text = clone.innerText || clone.textContent || rawText;
+                    } catch (_cloneError) {
+                        text = rawText;
+                    }
+                    const generating = Array.from(
+                        document.querySelectorAll('button')
+                    ).some(button => {
+                        const style = window.getComputedStyle(button);
+                        const visible = button.getClientRects().length > 0
+                            && style.display !== 'none'
+                            && style.visibility !== 'hidden';
+                        if (!visible) return false;
+                        const label = (
+                            button.getAttribute('aria-label') ||
+                            button.getAttribute('title') ||
+                            button.innerText || ''
+                        ).trim().toLowerCase();
+                        return label.includes('остановить');
                     });
-                });
-                const generating = Array.from(
-                    document.querySelectorAll('button')
-                ).some(button => {
-                    const label = (
-                        button.getAttribute('aria-label') ||
-                        button.getAttribute('title') ||
-                        button.innerText || ''
-                    ).trim().toLowerCase();
-                    return label.includes('остановить');
-                });
-                return {text: clone.innerText, generating};
+                    const completed = /^[\\t ]*\\[\\[NEXUSDOCS_END\\]\\][\\t ]*$/m
+                        .test(text);
+                    return {text, generating, completed, error: ''};
+                } catch (error) {
+                    return {
+                        text: document.body.innerText
+                            || document.body.textContent || '',
+                        generating: false,
+                        completed: false,
+                        error: String(error),
+                    };
+                }
             })()
-            """,
-            self._inspect_page_text,
+            """
+
+        frames = []
+        try:
+            def append_frame(frame) -> None:
+                if not frame.isValid():
+                    return
+                frames.append(frame)
+                for child in frame.children():
+                    append_frame(child)
+
+            append_frame(self.page.mainFrame())
+        except (AttributeError, RuntimeError):
+            frames = []
+
+        if not frames:
+            self.page.runJavaScript(
+                script,
+                lambda payload: self._inspect_page_text(payload, force=force),
+            )
+            return
+
+        state = {
+            "remaining": len(frames) + 1,
+            "payloads": [None] * (len(frames) + 1),
+        }
+
+        def receive_frame_payload(index: int, payload) -> None:
+            state["payloads"][index] = payload
+            state["remaining"] -= 1
+            if state["remaining"] != 0:
+                return
+            combined = self._merge_frame_payloads(state["payloads"])
+            if force:
+                clipboard_text = QGuiApplication.clipboard().text().strip()
+                if (
+                    clipboard_text
+                    and self.service.has_completed_answer(clipboard_text)
+                ):
+                    combined["text"] = "\n".join(
+                        part
+                        for part in (combined["text"], clipboard_text)
+                        if part
+                    )
+                    combined["completed"] = True
+            self._inspect_page_text(combined, force=force)
+
+        for index, frame in enumerate(frames):
+            frame.runJavaScript(
+                script,
+                lambda payload, frame_index=index: receive_frame_payload(
+                    frame_index,
+                    payload,
+                ),
+            )
+        self.page.toPlainText(
+            lambda text: receive_frame_payload(len(frames), text)
         )
 
-    def _inspect_page_text(self, payload) -> None:
+    @staticmethod
+    def _merge_frame_payloads(payloads) -> dict:
+        """Combine visible text collected inside all Alice web frames."""
+
+        texts: list[str] = []
+        errors: list[str] = []
+        generating = False
+        completed = False
+        for payload in payloads:
+            if isinstance(payload, dict):
+                text = payload.get("text", "")
+                generating = generating or bool(payload.get("generating"))
+                completed = completed or bool(payload.get("completed"))
+                error = str(payload.get("error") or "").strip()
+                if error:
+                    errors.append(error)
+            else:
+                text = payload
+            if isinstance(text, str) and text.strip() and text not in texts:
+                texts.append(text)
+        return {
+            "text": "\n".join(texts),
+            "generating": generating,
+            "completed": completed,
+            "error": "; ".join(errors) if not texts else "",
+        }
+
+    def _inspect_page_text(self, payload, *, force: bool = False) -> None:
         if isinstance(payload, dict):
             page_text = payload.get("text", "")
             generating = bool(payload.get("generating"))
+            completed = bool(payload.get("completed"))
+            polling_error = str(payload.get("error") or "").strip()
         else:
             page_text = payload
             generating = False
+            completed = False
+            polling_error = ""
+        if polling_error:
+            self.status_label.setText(
+                "Не удалось автоматически считать ответ Алисы: "
+                f"{polling_error}. Нажмите «Забрать готовые шапки»."
+            )
         if not isinstance(page_text, str) or not page_text:
+            if force and not polling_error:
+                self.status_label.setText(
+                    "Алиса не разрешила приложению прочитать страницу. "
+                    "Нажмите значок копирования под её ответом, затем снова "
+                    "нажмите «Забрать готовые шапки»."
+                )
             return
+        completed = completed or self.service.has_completed_answer(page_text)
         if page_text == self._last_page_text:
             self._stable_poll_count += 1
         else:
             self._last_page_text = page_text
             self._stable_poll_count = 0
-        if generating or self._stable_poll_count < 1:
-            return
         normalized = page_text.casefold().replace("ё", "е")
         if "подтвердите, что вы не робот" in normalized or "captcha" in normalized:
             self.status_label.setText(
@@ -257,13 +389,24 @@ class AliceOrganizationSearchDialog(QDialog):
         try:
             outcome = self.response_parser(page_text)
         except AliceResponseError as error:
+            # The full page never becomes stable reliably: clocks, sidebars and
+            # other Alice controls keep changing even after the answer is done.
+            # A successfully parsed closing marker is therefore authoritative;
+            # stability is only needed before reporting an invalid final answer.
+            if (
+                not force
+                and not completed
+                and (generating or self._stable_poll_count < 1)
+            ):
+                return
             begin = page_text.rfind(self.service.BEGIN_MARKER)
             end = page_text.find(
                 self.service.END_MARKER,
                 begin + len(self.service.BEGIN_MARKER),
             )
-            if begin >= 0 and end > begin:
+            if force or completed or (begin >= 0 and end > begin):
                 self.poll_timer.stop()
+                self.timeout_timer.stop()
                 self.error_message = str(error)
                 self.status_label.setText(
                     "Алиса закончила ответ, но его нельзя безопасно "

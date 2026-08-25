@@ -6,6 +6,7 @@ from docx import Document
 from docx.enum.section import WD_SECTION
 from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
+from docx.shared import Pt
 
 from domain.entities.organization import Organization
 from domain.enums.organization_type import OrganizationType
@@ -373,6 +374,41 @@ def test_generation_simplifies_recipient_header():
     cleaned = GenerationService._simple_recipient_header(incomplete)
     assert "ТРЕБУЕТ ПРОВЕРКИ" not in cleaned
     assert "+7 495 333-33-33" not in cleaned
+
+
+def test_generation_abbreviates_long_medical_titles():
+    organization = Organization(
+        id=None,
+        organization_type=OrganizationType.HOSPITAL,
+        recipient=(
+            "Главному врачу\n"
+            "Государственное бюджетное учреждение здравоохранения "
+            "Московской области «Клиническая областная больница»"
+        ),
+        postal_address="141300, Московская область, г. Сергиев Посад",
+        phones=("+7 (496) 111-11-11",),
+        email="hospital@example.ru",
+    )
+
+    header = GenerationService._simple_recipient_header(organization)
+
+    assert "ГБУЗ Московской области «КОБ»" in header
+    assert "Государственное бюджетное учреждение" not in header
+
+
+def test_dynamic_recipient_header_uses_times_new_roman_12_pt():
+    document = Document()
+    paragraph = document.add_paragraph()
+    run = paragraph.add_run("{{RECIPIENT_HEADER}}")
+    run.font.name = "Arial"
+
+    GenerationService._replace_in_paragraph(
+        paragraph,
+        {"{{RECIPIENT_HEADER}}": "Главному врачу\nГБУЗ «ЦРБ»"},
+    )
+
+    assert paragraph.runs[0].font.name == "Times New Roman"
+    assert paragraph.runs[0].font.size == Pt(12)
 
 
 def test_generation_uses_one_blank_line_before_contiguous_contacts():

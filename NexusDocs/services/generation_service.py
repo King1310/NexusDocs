@@ -13,6 +13,7 @@ from docx.document import Document as DocumentObject
 from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Pt
 from docx.table import _Cell, Table
 from docx.text.paragraph import Paragraph
 from lxml import etree
@@ -393,6 +394,7 @@ class GenerationService:
                 ),
             }[organization_type]
             details = [line for line in details if re.search(required, line)]
+            details = [cls._abbreviate_medical_title(line) for line in details]
             return [
                 "Главному врачу",
                 *(details or ["медицинской организации по месту регистрации"]),
@@ -432,6 +434,25 @@ class GenerationService:
             ]
 
         return lines
+
+    @staticmethod
+    def _abbreviate_medical_title(value: str) -> str:
+        """Use conventional medical abbreviations in dynamic Word headers."""
+
+        replacements = (
+            (r"\bгосударственное\s+бюджетное\s+учреждение\s+здравоохранения\b", "ГБУЗ"),
+            (r"\bгосударственное\s+автономное\s+учреждение\s+здравоохранения\b", "ГАУЗ"),
+            (r"\bгосударственное\s+каз[её]нное\s+учреждение\s+здравоохранения\b", "ГКУЗ"),
+            (r"\bцентральная\s+районная\s+больница\b", "ЦРБ"),
+            (r"\bцентральная\s+городская\s+больница\b", "ЦГБ"),
+            (r"\bгородская\s+клиническая\s+больница\b", "ГКБ"),
+            (r"\bклиническая\s+областная\s+больница\b", "КОБ"),
+            (r"\bобластная\s+клиническая\s+больница\b", "ОКБ"),
+        )
+        result = value
+        for pattern, abbreviation in replacements:
+            result = re.sub(pattern, abbreviation, result, flags=re.IGNORECASE)
+        return result
 
     @staticmethod
     def _sentence_case_if_upper(value: str) -> str:
@@ -642,6 +663,8 @@ class GenerationService:
                     if replaced_run == run.text:
                         continue
                     run.text = replaced_run
+                    if placeholder == "{{RECIPIENT_HEADER}}":
+                        GenerationService._format_recipient_run(run)
                     if placeholder in highlighted_placeholders:
                         run.font.highlight_color = WD_COLOR_INDEX.YELLOW
                     else:
@@ -662,12 +685,28 @@ class GenerationService:
 
         if paragraph.runs:
             paragraph.runs[0].text = replaced
+            if "{{RECIPIENT_HEADER}}" in combined:
+                GenerationService._format_recipient_run(paragraph.runs[0])
             if should_highlight:
                 paragraph.runs[0].font.highlight_color = WD_COLOR_INDEX.YELLOW
             else:
                 paragraph.runs[0].font.highlight_color = None
             for run in paragraph.runs[1:]:
                 run.text = ""
+
+    @staticmethod
+    def _format_recipient_run(run) -> None:
+        """Format only the nine dynamic headers inserted into Word."""
+
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(12)
+        run_properties = run._element.get_or_add_rPr()
+        run_fonts = run_properties.find(qn("w:rFonts"))
+        if run_fonts is None:
+            run_fonts = OxmlElement("w:rFonts")
+            run_properties.insert(0, run_fonts)
+        for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
+            run_fonts.set(qn(f"w:{attribute}"), "Times New Roman")
 
     @staticmethod
     def _replace_in_package(
@@ -716,6 +755,7 @@ class GenerationService:
                             )
                             if replaced == combined:
                                 continue
+                            is_recipient_header = "{{RECIPIENT_HEADER}}" in combined
                             first_node = nodes[0]
                             first_node.text = replaced
                             run = first_node.getparent()
@@ -725,6 +765,25 @@ class GenerationService:
                                     qn("w:highlight")
                                 ):
                                     run_properties.remove(existing)
+                            if is_recipient_header:
+                                if run_properties is None:
+                                    run_properties = OxmlElement("w:rPr")
+                                    run.insert(0, run_properties)
+                                run_fonts = run_properties.find(qn("w:rFonts"))
+                                if run_fonts is None:
+                                    run_fonts = OxmlElement("w:rFonts")
+                                    run_properties.insert(0, run_fonts)
+                                for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
+                                    run_fonts.set(
+                                        qn(f"w:{attribute}"),
+                                        "Times New Roman",
+                                    )
+                                for tag in ("w:sz", "w:szCs"):
+                                    size = run_properties.find(qn(tag))
+                                    if size is None:
+                                        size = OxmlElement(tag)
+                                        run_properties.append(size)
+                                    size.set(qn("w:val"), "24")
                             if should_highlight:
                                 if run_properties is None:
                                     run_properties = OxmlElement("w:rPr")
