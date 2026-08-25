@@ -80,6 +80,42 @@ def test_soch_window_loads_existing_data(form_data):
     assert window.article_input.text() == "ч. 5 ст. 337 УК РФ"
 
 
+@pytest.mark.parametrize(
+    ("duration", "article"),
+    (
+        ("Более 1 месяца", "ч. 5 ст. 337 УК РФ"),
+        ("Более 10 суток, но не более месяца", "ч. 3.1 ст. 337 УК РФ"),
+        ("Более двух суток, но не более 10 дней", "ч. 2.1 ст. 337 УК РФ"),
+    ),
+)
+def test_soch_duration_updates_article(form_data, duration, article):
+    window = PersonSochWindow(form_data)
+
+    window.duration_input.setCurrentText(duration)
+
+    assert window.article_input.text() == article
+
+
+def test_mp_case_hides_and_does_not_require_case_number(form_data, monkeypatch):
+    window = PersonSochWindow(form_data)
+    warnings = []
+    monkeypatch.setattr(
+        "ui.person_soch_window.QMessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+
+    window.case_type_input.setCurrentText("МП")
+    window.save_form()
+
+    assert window.case_number_label.isHidden()
+    assert window.case_number_input.isHidden()
+    assert warnings == []
+    assert window.result() == QDialog.DialogCode.Accepted
+    assert form_data.soch_case is not None
+    assert form_data.soch_case.case_type == "МП"
+    assert form_data.soch_case.case_number is None
+
+
 def test_document_window_loads_existing_data(form_data):
     window = PersonDocumentWindow(form_data)
 

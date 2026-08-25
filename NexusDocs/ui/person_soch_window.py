@@ -183,9 +183,6 @@ class PersonSochWindow(QDialog):
             self.go_back
         )
 
-    def go_back(self) -> None:
-        self.done(BACK_DIALOG_CODE)
-
         self.duration_input.currentIndexChanged.connect(
             self._update_article
         )
@@ -193,6 +190,9 @@ class PersonSochWindow(QDialog):
         self.case_type_input.currentIndexChanged.connect(
             self._update_case_number_state
         )
+
+    def go_back(self) -> None:
+        self.done(BACK_DIALOG_CODE)
 
     def _update_article(self) -> None:
         """
