@@ -16,7 +16,12 @@ _SECTION_PATTERN = re.compile(
     r"(?m)^\s*(?:#{1,6}\s*)?(?:\*{0,2})?([1-9])\s*[).:]\s*"
 )
 _HEADER_MARKER_PATTERN = re.compile(
-    r"(?m)^\s*\[\[NEXUSDOCS_HEADER_([1-9])\]\]\s*$"
+    r"\[\[\s*NEXUSDOCS_HEADER_([1-9])\s*\]\]",
+    re.IGNORECASE,
+)
+_FIELD_MARKER_PATTERN = re.compile(
+    r"\[\[\s*NEXUSDOCS_(RECIPIENT|ADDRESS|PHONE|EMAIL)\s*\]\]",
+    re.IGNORECASE,
 )
 _POSTAL_INDEX_PATTERN = re.compile(r"(?<!\d)\d{6}(?!\d)")
 _PHONE_PATTERN = re.compile(
@@ -94,9 +99,23 @@ class AliceOrganizationSearchService:
 8. в пункт отбора на военную службу по контракту;
 9. председателю территориальной избирательной комиссии.
 
-Перед строкой [[NEXUSDOCS_END]] обязательно проверь: в ответе должно быть девять строк «тел.:» и минимум шесть строк «эл. почта:» — в шапках 3, 4, 5, 6, 7 и 9.
+Перед строкой [[NEXUSDOCS_END]] обязательно проверь: в ответе должно быть девять полей [[NEXUSDOCS_PHONE]] и минимум шесть непустых полей [[NEXUSDOCS_EMAIL]] — в шапках 3, 4, 5, 6, 7 и 9.
 
-Начни ответ отдельной строкой [[NEXUSDOCS_BEGIN]], закончи отдельной строкой [[NEXUSDOCS_END]]. Каждую шапку начинай отдельной строкой только с номера вида «1)», «2)» и так далее. После номера сразу с новой строки пиши саму шапку. Никакого текста до, после или между шапками не добавляй.'''
+ВАЖНО ДЛЯ ФОРМАТА: не используй нумерованный или маркированный Markdown-список. Верни данные только по машинному протоколу ниже. Все служебные метки копируй буквально, без изменений. Переносы строк между метками не принципиальны, но сами метки обязательны.
+
+[[NEXUSDOCS_BEGIN]]
+[[NEXUSDOCS_HEADER_1]]
+[[NEXUSDOCS_RECIPIENT]]кому и название организации
+[[NEXUSDOCS_ADDRESS]]полный почтовый адрес организации с индексом
+[[NEXUSDOCS_PHONE]]один или максимум два телефона
+[[NEXUSDOCS_EMAIL]]электронная почта либо пусто только для шапок 1, 2 и 8
+[[NEXUSDOCS_HEADER_2]]
+[[NEXUSDOCS_RECIPIENT]]...
+[[NEXUSDOCS_ADDRESS]]...
+[[NEXUSDOCS_PHONE]]...
+[[NEXUSDOCS_EMAIL]]...
+
+Продолжи точно так же до [[NEXUSDOCS_HEADER_9]]. После поля [[NEXUSDOCS_EMAIL]] девятой шапки поставь [[NEXUSDOCS_END]]. Не добавляй номера 1–9, пояснения, источники, ссылки или любой другой текст вне этого протокола.'''
         return AliceSearchRequest(prompt=prompt, public_address=public_address)
 
     @staticmethod
@@ -131,6 +150,8 @@ class AliceOrganizationSearchService:
             ]
         else:
             blocks = cls._unnumbered_header_blocks(text)
+            if len(blocks) != 9:
+                blocks = cls._postal_group_header_blocks(text)
             matches = cls._ordered_header_matches(text)
             if len(blocks) != 9 and len(matches) == 9:
                 blocks = [
@@ -158,12 +179,119 @@ class AliceOrganizationSearchService:
         unresolved: list[OrganizationType] = []
         types = tuple(OrganizationType)
         for index, block in enumerate(blocks):
-            organization = cls._parse_header_block(types[index], block)
+            if _FIELD_MARKER_PATTERN.search(block):
+                organization = cls._parse_tagged_header_block(types[index], block)
+            else:
+                organization = cls._parse_header_block(types[index], block)
             organizations.append(organization)
             if organization.verification_status == "needs_review":
                 unresolved.append(organization.organization_type)
 
         return FreeSearchOutcome(tuple(organizations), tuple(unresolved))
+
+    @classmethod
+    def extract_complete_tagged_blocks(cls, value: str) -> dict[int, str]:
+        """Collect complete real headers from a possibly virtualized page."""
+
+        text = cls._clean_text(value)
+        matches = list(_HEADER_MARKER_PATTERN.finditer(text))
+        collected: dict[int, str] = {}
+        for index, match in enumerate(matches):
+            number = int(match.group(1))
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            closing = text.find(_END_MARKER, match.end(), end)
+            if closing >= 0:
+                end = closing
+            block = text[match.start():end].strip()
+            fields = [
+                field.group(1).upper()
+                for field in _FIELD_MARKER_PATTERN.finditer(block)
+            ]
+            if fields != ["RECIPIENT", "ADDRESS", "PHONE", "EMAIL"]:
+                continue
+            if not _POSTAL_INDEX_PATTERN.search(block) or not cls._phones(block):
+                # This also discards the illustrative placeholders embedded in
+                # the request itself.
+                continue
+            collected[number] = block
+        return collected
+
+    @staticmethod
+    def assemble_tagged_blocks(blocks: dict[int, str]) -> str:
+        if set(blocks) != set(range(1, 10)):
+            raise AliceResponseError("Собраны не все девять шапок Алисы.")
+        return "\n".join(
+            (
+                _BEGIN_MARKER,
+                *(blocks[number] for number in range(1, 10)),
+                _END_MARKER,
+            )
+        )
+
+    @classmethod
+    def _parse_tagged_header_block(
+        cls,
+        organization_type: OrganizationType,
+        block: str,
+    ) -> Organization:
+        """Parse a header without relying on Alice's visual layout."""
+
+        text = cls._clean_text(block)
+        matches = list(_FIELD_MARKER_PATTERN.finditer(text))
+        names = [match.group(1).upper() for match in matches]
+        expected = ["RECIPIENT", "ADDRESS", "PHONE", "EMAIL"]
+        if names != expected:
+            raise AliceResponseError(
+                f"В шапке «{organization_type.value}» нарушен машинный "
+                "формат полей RECIPIENT, ADDRESS, PHONE, EMAIL."
+            )
+
+        values: dict[str, str] = {}
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            values[match.group(1).upper()] = text[match.end():end].strip()
+
+        recipient = "\n".join(
+            cls._clean_line(line)
+            for line in values["RECIPIENT"].splitlines()
+            if cls._clean_line(line)
+        )
+        postal_address = " ".join(values["ADDRESS"].split()).strip(" ,")
+        phones = cls._phones(values["PHONE"])
+        email_text = cls._normalized_email_text(values["EMAIL"])
+        email_match = _EMAIL_PATTERN.search(email_text)
+        email = email_match.group(0) if email_match else ""
+
+        missing: list[str] = []
+        if not recipient:
+            missing.append("адресат")
+        if not _POSTAL_INDEX_PATTERN.search(postal_address):
+            missing.append("почтовый адрес с индексом")
+        if not phones:
+            missing.append("телефон")
+        if organization_type not in cls._email_optional_types() and not email:
+            missing.append("электронная почта")
+
+        status = "needs_review" if missing else "auto_found"
+        note = (
+            "Ответ Алисы требует проверки: не найдено: "
+            + ", ".join(missing)
+            + "."
+            if missing
+            else "Шапка найдена Alice AI по адресу регистрации."
+        )
+        return Organization(
+            id=None,
+            organization_type=organization_type,
+            recipient=recipient,
+            postal_address=postal_address,
+            phones=phones,
+            email=email,
+            source_url="https://alice.yandex.ru/",
+            verification_status=status,
+            verified_at="",
+            verification_note=note,
+        )
 
     @classmethod
     def parse_response_for_address(
@@ -298,6 +426,57 @@ class AliceOrganizationSearchService:
                     for index, start in enumerate(starts)
                 ]
         return []
+
+    @classmethod
+    def _postal_group_header_blocks(cls, text: str) -> list[str]:
+        """Recover nine headers when Alice exposes list markers only via CSS.
+
+        Alice occasionally changes the recipient wording and removes list
+        numbers from ``innerText``.  A complete answer still has one postal
+        index per header, so paragraph groups around those indexes provide a
+        stable boundary independent of the page's HTML structure.
+        """
+
+        lines = [
+            cls._clean_line(line)
+            for line in cls._clean_text(text).splitlines()
+        ]
+        lines = [line for line in lines if line]
+        address_lines = [
+            index
+            for index, line in enumerate(lines)
+            if _POSTAL_INDEX_PATTERN.search(line)
+        ]
+        if len(address_lines) != 9:
+            return []
+
+        starts = [0]
+        for current_address, next_address in zip(
+            address_lines,
+            address_lines[1:],
+        ):
+            contact_lines = [
+                index
+                for index in range(current_address + 1, next_address)
+                if cls._is_phone_line(lines[index])
+                or cls._is_email_line(lines[index])
+                or bool(cls._phones(lines[index]))
+            ]
+            if not contact_lines:
+                return []
+            start = max(contact_lines) + 1
+            if start >= next_address:
+                return []
+            starts.append(start)
+
+        blocks = []
+        for index, start in enumerate(starts):
+            end = starts[index + 1] if index + 1 < len(starts) else len(lines)
+            block = "\n".join(lines[start:end]).strip()
+            if not _POSTAL_INDEX_PATTERN.search(block):
+                return []
+            blocks.append(block)
+        return blocks if len(blocks) == 9 else []
 
     @staticmethod
     def _ordered_header_matches(text: str) -> list[re.Match[str]]:
@@ -444,12 +623,34 @@ class AliceOrganizationSearchService:
             value,
             flags=re.IGNORECASE,
         )
-        return re.sub(
+        value = re.sub(
             r"\[\[\s*NEXUSDOCS\s*_\s*END\s*\]\]",
             _END_MARKER,
             value,
             flags=re.IGNORECASE,
         )
+        # Alice's current web renderer may flatten an entire header into one
+        # visual paragraph: "address tel.: ... эл. почта: ... [[END]]".
+        # Restore the field boundaries expected by the parser regardless of
+        # whether the browser exposes paragraph breaks.
+        value = re.sub(
+            r"[ \t]*(?=(?:тел\.?|телефон|факс)\s*:)",
+            "\n",
+            value,
+            flags=re.IGNORECASE,
+        )
+        value = re.sub(
+            r"[ \t]*(?=(?:эл\.?\s*почта|электронная\s+почта|e-?mail)\s*:)",
+            "\n",
+            value,
+            flags=re.IGNORECASE,
+        )
+        value = re.sub(
+            rf"[ \t]*(?={re.escape(_BEGIN_MARKER)}|{re.escape(_END_MARKER)})",
+            "\n",
+            value,
+        )
+        return value
 
     @classmethod
     def has_completed_answer(cls, value: str) -> bool:

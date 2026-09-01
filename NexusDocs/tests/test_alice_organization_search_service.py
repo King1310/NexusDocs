@@ -111,6 +111,23 @@ def _alice_answer() -> str:
 Подвал страницы"""
 
 
+def _tagged_answer() -> str:
+    legacy = AliceOrganizationSearchService.parse_response(_alice_answer())
+    chunks = ["[[NEXUSDOCS_BEGIN]]"]
+    for number, organization in enumerate(legacy.organizations, start=1):
+        chunks.extend(
+            (
+                f"[[NEXUSDOCS_HEADER_{number}]]",
+                "[[NEXUSDOCS_RECIPIENT]]" + organization.recipient,
+                "[[NEXUSDOCS_ADDRESS]]" + organization.postal_address,
+                "[[NEXUSDOCS_PHONE]]" + ", ".join(organization.phones),
+                "[[NEXUSDOCS_EMAIL]]" + organization.email,
+            )
+        )
+    chunks.append("[[NEXUSDOCS_END]]")
+    return "\n".join(chunks)
+
+
 def test_prompt_uses_address_without_apartment_and_demands_nine_headers():
     request = AliceOrganizationSearchService.build_request(_address())
 
@@ -126,10 +143,16 @@ def test_prompt_uses_address_without_apartment_and_demands_nine_headers():
     assert "Без электронной почты допускаются только шапки 1, 2 и 8" in request.prompt
     assert "ГБУЗ, ГАУЗ, ГКБ, ЦРБ, ЦГБ, КОБ, ОКБ" in request.prompt
     assert "обязательны во всех девяти шапках" in request.prompt
-    assert "девять строк «тел.:»" in request.prompt
+    assert "девять полей [[NEXUSDOCS_PHONE]]" in request.prompt
     assert "Нужно ровно 9 шапок" in request.prompt
     assert "[[NEXUSDOCS_BEGIN]]" in request.prompt
     assert "[[NEXUSDOCS_END]]" in request.prompt
+    assert "не используй нумерованный или маркированный Markdown-список" in request.prompt
+    assert "[[NEXUSDOCS_HEADER_1]]" in request.prompt
+    assert "[[NEXUSDOCS_RECIPIENT]]" in request.prompt
+    assert "[[NEXUSDOCS_ADDRESS]]" in request.prompt
+    assert "[[NEXUSDOCS_PHONE]]" in request.prompt
+    assert "[[NEXUSDOCS_EMAIL]]" in request.prompt
 
 
 def test_completed_marker_ignores_invisible_web_characters():
@@ -175,10 +198,59 @@ def test_parser_builds_all_nine_organizations_in_protocol_order():
     assert narcology.email == "kospol078@mail.ru"
     rendered = GenerationService._simple_recipient_header(narcology)
     assert "Поликлиника\nНаркологический кабинет" in rendered
+
+
+def test_parser_accepts_tagged_protocol_even_when_alice_flattens_everything():
+    flattened = " ".join(_tagged_answer().splitlines())
+
+    outcome = AliceOrganizationSearchService.parse_response(flattened)
+
+    assert len(outcome.organizations) == 9
+    assert outcome.unresolved_types == ()
+    assert outcome.organizations[2].recipient.startswith("Главному врачу")
+    assert outcome.organizations[2].phones == (
+        "+7 (81459) 5-15-57",
+        "+7 (981) 408-03-08",
+    )
+    assert outcome.organizations[8].email == "tik@example.ru"
     assert all(
         item.source_url == "https://alice.yandex.ru/"
         for item in outcome.organizations
     )
+
+
+def test_tagged_blocks_can_be_accumulated_from_virtualized_fragments():
+    tagged = _tagged_answer()
+    marker = "[[NEXUSDOCS_HEADER_"
+    fragments = []
+    for start_number, end_number in ((1, 4), (4, 7), (7, 10)):
+        start = tagged.index(f"{marker}{start_number}]]")
+        if end_number == 10:
+            end = tagged.index("[[NEXUSDOCS_END]]")
+        else:
+            end = tagged.index(f"{marker}{end_number}]]")
+        fragments.append(tagged[start:end])
+
+    collected: dict[int, str] = {}
+    for fragment in fragments:
+        collected.update(
+            AliceOrganizationSearchService.extract_complete_tagged_blocks(fragment)
+        )
+
+    assembled = AliceOrganizationSearchService.assemble_tagged_blocks(collected)
+    outcome = AliceOrganizationSearchService.parse_response(assembled)
+    assert len(outcome.organizations) == 9
+    assert outcome.organizations[8].email == "tik@example.ru"
+
+
+def test_tagged_collector_ignores_request_placeholders():
+    request = AliceOrganizationSearchService.build_request(_address())
+
+    collected = AliceOrganizationSearchService.extract_complete_tagged_blocks(
+        request.prompt
+    )
+
+    assert collected == {}
 
 
 def test_parser_prefers_explicit_text_header_markers():
@@ -259,6 +331,43 @@ def test_parser_splits_html_list_text_when_css_numbers_are_missing():
     assert len(outcome.organizations) == 9
     assert outcome.organizations[0].recipient.startswith("Военному комиссару")
     assert outcome.organizations[8].recipient.startswith("Председателю")
+
+
+def test_parser_uses_postal_groups_when_css_numbers_and_expected_titles_are_missing():
+    response = re.sub(
+        r"(?m)^\s*[1-9]\)\s*\n",
+        "",
+        _alice_answer(),
+    )
+    response = response.replace("Главному врачу", "Руководителю", 3)
+
+    outcome = AliceOrganizationSearchService.parse_response(response)
+
+    assert len(outcome.organizations) == 9
+    assert outcome.organizations[2].postal_address.startswith("186930")
+    assert outcome.organizations[8].email == "tik@example.ru"
+
+
+def test_parser_accepts_alice_flattened_contact_lines_and_inline_end_marker():
+    response = re.sub(
+        r"(?m)^\s*[1-9]\)\s*\n",
+        "",
+        _alice_answer(),
+    )
+    response = re.sub(
+        r"\n(?=(?:тел\.?|эл\.?\s*почта)\s*:)",
+        " ",
+        response,
+        flags=re.IGNORECASE,
+    )
+    response = response.replace("\n[[NEXUSDOCS_END]]", " [[NEXUSDOCS_END]]")
+
+    outcome = AliceOrganizationSearchService.parse_response(response)
+
+    assert len(outcome.organizations) == 9
+    assert outcome.organizations[6].phones == ("+7 (81459) 5-20-20",)
+    assert outcome.organizations[8].email == "tik@example.ru"
+    assert AliceOrganizationSearchService.has_completed_answer(response)
 
 
 def test_parser_uses_last_complete_recipient_sequence_on_unmarked_chat_page():

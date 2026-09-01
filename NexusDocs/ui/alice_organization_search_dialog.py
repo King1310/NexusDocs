@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 from PySide6.QtCore import QStandardPaths, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
@@ -50,6 +51,7 @@ class AliceOrganizationSearchDialog(QDialog):
         self._sent = False
         self._last_page_text = ""
         self._stable_poll_count = 0
+        self._tagged_blocks: dict[int, str] = {}
 
         self.setWindowTitle("Поиск девяти шапок через Алису AI")
         self.resize(1180, 780)
@@ -216,8 +218,10 @@ class AliceOrganizationSearchDialog(QDialog):
                             let nextNumber = Number(
                                 list.getAttribute('start') || 1
                             );
-                            Array.from(list.children).forEach(item => {
-                                if (item.tagName !== 'LI') return;
+                            const items = Array.from(
+                                list.querySelectorAll('li')
+                            ).filter(item => item.closest('ol') === list);
+                            items.forEach(item => {
                                 const valueAttribute = item.getAttribute('value');
                                 const explicit = valueAttribute === null
                                     ? Number.NaN
@@ -248,7 +252,10 @@ class AliceOrganizationSearchDialog(QDialog):
                             button.getAttribute('title') ||
                             button.innerText || ''
                         ).trim().toLowerCase();
-                        return label.includes('остановить');
+                        return label.includes('остановить')
+                            || label === 'стоп'
+                            || label.endsWith(', стоп')
+                            || label.includes('alice, stop');
                     });
                     const completed = /^[\\t ]*\\[\\[NEXUSDOCS_END\\]\\][\\t ]*$/m
                         .test(text);
@@ -342,21 +349,50 @@ class AliceOrganizationSearchDialog(QDialog):
                 text = payload
             if isinstance(text, str) and text.strip() and text not in texts:
                 texts.append(text)
+        texts.sort(key=AliceOrganizationSearchDialog._payload_text_score)
         return {
-            "text": "\n".join(texts),
+            "text": texts[-1] if texts else "",
+            "candidate_texts": texts,
             "generating": generating,
             "completed": completed,
             "error": "; ".join(errors) if not texts else "",
         }
 
+    @staticmethod
+    def _payload_text_score(value: str) -> tuple[int, int, int, int, int]:
+        numbers = {
+            int(match.group(1))
+            for match in re.finditer(
+                r"(?m)^\s*([1-9])\s*[).:]\s*",
+                value,
+            )
+        }
+        header_markers = {
+            int(number)
+            for number in re.findall(
+                r"\[\[\s*NEXUSDOCS_HEADER_([1-9])\s*\]\]",
+                value,
+                flags=re.IGNORECASE,
+            )
+        }
+        return (
+            int(AliceOrganizationSearchService.has_completed_answer(value)),
+            int(header_markers == set(range(1, 10))),
+            len(header_markers),
+            int(numbers == set(range(1, 10))),
+            len(value),
+        )
+
     def _inspect_page_text(self, payload, *, force: bool = False) -> None:
         if isinstance(payload, dict):
             page_text = payload.get("text", "")
+            candidate_texts = payload.get("candidate_texts") or [page_text]
             generating = bool(payload.get("generating"))
             completed = bool(payload.get("completed"))
             polling_error = str(payload.get("error") or "").strip()
         else:
             page_text = payload
+            candidate_texts = [page_text]
             generating = False
             completed = False
             polling_error = ""
@@ -373,6 +409,23 @@ class AliceOrganizationSearchDialog(QDialog):
                     "нажмите «Забрать готовые шапки»."
                 )
             return
+        if hasattr(self.service, "extract_complete_tagged_blocks"):
+            tagged_blocks = getattr(self, "_tagged_blocks", None)
+            if tagged_blocks is None:
+                tagged_blocks = {}
+                self._tagged_blocks = tagged_blocks
+            for candidate in candidate_texts:
+                if not isinstance(candidate, str):
+                    continue
+                current_prompt = candidate.rfind("ВАЖНО ДЛЯ ФОРМАТА")
+                if current_prompt >= 0:
+                    candidate = candidate[current_prompt:]
+                tagged_blocks.update(
+                    self.service.extract_complete_tagged_blocks(candidate)
+                )
+            if set(tagged_blocks) == set(range(1, 10)):
+                page_text = self.service.assemble_tagged_blocks(tagged_blocks)
+                completed = True
         completed = completed or self.service.has_completed_answer(page_text)
         if page_text == self._last_page_text:
             self._stable_poll_count += 1
@@ -389,29 +442,21 @@ class AliceOrganizationSearchDialog(QDialog):
         try:
             outcome = self.response_parser(page_text)
         except AliceResponseError as error:
-            # The full page never becomes stable reliably: clocks, sidebars and
-            # other Alice controls keep changing even after the answer is done.
-            # A successfully parsed closing marker is therefore authoritative;
-            # stability is only needed before reporting an invalid final answer.
-            if (
-                not force
-                and not completed
-                and (generating or self._stable_poll_count < 1)
-            ):
+            # Alice changes the stop control and its accessible label often.
+            # More importantly, the user's prompt itself contains the complete
+            # protocol and is visible on the page while Alice is still writing.
+            # Therefore an invalid automatic snapshot is never authoritative:
+            # keep polling until a complete response parses successfully.  A
+            # manual collection is explicit and may report the parse error.
+            if not force:
                 return
-            begin = page_text.rfind(self.service.BEGIN_MARKER)
-            end = page_text.find(
-                self.service.END_MARKER,
-                begin + len(self.service.BEGIN_MARKER),
+            self.poll_timer.stop()
+            self.timeout_timer.stop()
+            self.error_message = str(error)
+            self.status_label.setText(
+                "Готовый ответ Алисы пока нельзя безопасно сохранить: "
+                f"{error} Дождитесь конца ответа и нажмите кнопку ещё раз."
             )
-            if force or completed or (begin >= 0 and end > begin):
-                self.poll_timer.stop()
-                self.timeout_timer.stop()
-                self.error_message = str(error)
-                self.status_label.setText(
-                    "Алиса закончила ответ, но его нельзя безопасно "
-                    f"сохранить: {error} Нажмите «Отправить заново»."
-                )
             return
 
         self.outcome = outcome
@@ -426,6 +471,7 @@ class AliceOrganizationSearchDialog(QDialog):
         self._sent = False
         self._last_page_text = ""
         self._stable_poll_count = 0
+        self._tagged_blocks.clear()
         self.error_message = ""
         self.timeout_timer.start(self.SEARCH_TIMEOUT_MS)
         current = self.web_view.url().toString()
