@@ -44,7 +44,7 @@ _RECIPIENT_STARTS = (
 
 
 class AliceResponseError(ValueError):
-    """Alice returned text that cannot be safely split into nine headers."""
+    """The AI response cannot be safely split into nine headers."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -54,7 +54,7 @@ class AliceSearchRequest:
 
 
 class AliceOrganizationSearchService:
-    """Build a strict Alice AI request and parse its nine dry header blocks."""
+    """Build a strict Google AI Mode request and parse nine dry headers."""
 
     BEGIN_MARKER = _BEGIN_MARKER
     END_MARKER = _END_MARKER
@@ -62,60 +62,34 @@ class AliceOrganizationSearchService:
     @classmethod
     def build_request(cls, address: Address) -> AliceSearchRequest:
         public_address = cls.public_registration_address(address)
-        prompt = f'''Сделай шапки для организаций, относящихся к этому адресу: "{public_address}"
+        prompt = f'''Адрес регистрации человека: "{public_address}". Это только адрес человека, НЕ адрес организаций. Найди организации, которые территориально отвечают за этот адрес, и для каждой укажи её собственные официальные реквизиты. Проверь территориальную принадлежность и контакты по официальным источникам.
 
-Важно: указанный адрес — это адрес регистрации субъекта, а не адрес организации. По нему нужно определить организации, которые отвечают за этот адрес и территориально обслуживают зарегистрированного по нему человека. Для каждой организации отдельно найди её собственные официальные реквизиты. Не подставляй адрес субъекта как адрес организации, если интернет-поиск не подтвердил реальное совпадение.
+Нужно ровно 9 шапок в порядке:
+1 военный комиссариат
+2 военная комендатура
+3 местный наркологический диспансер или кабинет
+4 местная психиатрическая служба
+5 центральная районная или главная больница
+6 территориальный фонд обязательного медицинского страхования
+7 глава администрации без ФИО
+8 пункт отбора на военную службу по контракту
+9 территориальная избирательная комиссия
 
-Вот пример готовой шапки:
+В каждой шапке: кому и официальное компактное название; собственный полный адрес организации с индексом; один или максимум два телефона; электронная почта. В поле RECIPIENT обращение пиши первой строкой, название организации — со следующей строки, не объединяй их запятой. Электронную почту обязательно ИЩИ для всех девяти организаций и указывай всегда, когда она опубликована. Для 3, 4, 5, 6, 7 и 9 почта обязательна. Для 1, 2 и 8 пустое поле допустимо только если после отдельного поиска на официальном сайте, странице контактов и региональном портале опубликованная почта действительно не найдена; не пропускай поиск почты лишь потому, что для этих трёх шапок она необязательна. Телефон обязателен во всех девяти шапках. ФИО людей не пиши. Должности не сокращай. Используй официальные общепринятые сокращения ГБУЗ, ГАУЗ, ГКБ, ЦРБ, ЦГБ, КОБ, ОКБ, ТФОМС. Никаких пояснений, предупреждений и ссылок.
 
-Главному врачу
-ГБУЗ Республики Карелия
-«Межрайонная больница № 1»
-
-Поликлиника
-Наркологический кабинет
-
-186930, Республика Карелия,
-г. Костомукша, ул. Советская, д. 12
-тел.: +7 (81459) 5-15-57,
-+7 (981) 408-03-08
-эл. почта: kospol078@mail.ru
-
-ФИО руководителей и других людей указывать не нужно. Сделай строго по шаблону: кому и название организации, затем полный почтовый адрес с индексом, максимум два телефона и электронная почта. Для военного комиссариата, военной комендатуры и пункта отбора на военную службу по контракту электронную почту можно не указывать. Должности не сокращай. В названиях организаций используй только официальные общепринятые сокращения, чтобы шапки были компактными: например, ГБУЗ, ГАУЗ, ГКБ, ЦРБ, ЦГБ, КОБ, ОКБ. Не придумывай неофициальные сокращения. Не пиши пояснения, предупреждения, степень уверенности и ссылки.
-
-ВАЖНО: для шапок 3, 4, 5, 6, 7 и 9 строка «эл. почта:» обязательна. Если электронная почта ещё не найдена, продолжай интернет-поиск и не завершай ответ. Нельзя пропускать электронную почту сразу во всех шапках. Без электронной почты допускаются только шапки 1, 2 и 8.
-
-ВАЖНО: строка «тел.:» и хотя бы один реальный телефон обязательны во всех девяти шапках без исключений. Можно указать один или максимум два телефона. Если телефон организации ещё не найден, продолжай интернет-поиск и не завершай ответ.
-
-Нужно ровно 9 шапок и строго в этом порядке:
-
-1. в военный комиссариат;
-2. в военную комендатуру;
-3. в местный наркологический диспансер или кабинет;
-4. в местную психиатрическую службу;
-5. в центральную районную или главную больницу по этому адресу;
-6. в территориальный фонд обязательного медицинского страхования;
-7. главе администрации, отвечающей за указанный адрес, без ФИО главы;
-8. в пункт отбора на военную службу по контракту;
-9. председателю территориальной избирательной комиссии.
-
-Перед строкой [[NEXUSDOCS_END]] обязательно проверь: в ответе должно быть девять полей [[NEXUSDOCS_PHONE]] и минимум шесть непустых полей [[NEXUSDOCS_EMAIL]] — в шапках 3, 4, 5, 6, 7 и 9.
-
-ВАЖНО ДЛЯ ФОРМАТА: не используй нумерованный или маркированный Markdown-список. Верни данные только по машинному протоколу ниже. Все служебные метки копируй буквально, без изменений. Переносы строк между метками не принципиальны, но сами метки обязательны.
-
+Ответ только в таком машинном формате:
 [[NEXUSDOCS_BEGIN]]
 [[NEXUSDOCS_HEADER_1]]
 [[NEXUSDOCS_RECIPIENT]]кому и название организации
-[[NEXUSDOCS_ADDRESS]]полный почтовый адрес организации с индексом
+[[NEXUSDOCS_ADDRESS]]полный адрес организации с индексом
 [[NEXUSDOCS_PHONE]]один или максимум два телефона
-[[NEXUSDOCS_EMAIL]]электронная почта либо пусто только для шапок 1, 2 и 8
+[[NEXUSDOCS_EMAIL]]найденная электронная почта; пусто только для 1, 2 и 8, если она действительно не опубликована
 [[NEXUSDOCS_HEADER_2]]
 [[NEXUSDOCS_RECIPIENT]]...
 [[NEXUSDOCS_ADDRESS]]...
 [[NEXUSDOCS_PHONE]]...
 [[NEXUSDOCS_EMAIL]]...
-
-Продолжи точно так же до [[NEXUSDOCS_HEADER_9]]. После поля [[NEXUSDOCS_EMAIL]] девятой шапки поставь [[NEXUSDOCS_END]]. Не добавляй номера 1–9, пояснения, источники, ссылки или любой другой текст вне этого протокола.'''
+Продолжи без пропусков до [[NEXUSDOCS_HEADER_9]], затем поставь [[NEXUSDOCS_END]]. Метки пиши буквально. Не используй Markdown-нумерацию и не добавляй текст вне протокола.'''
         return AliceSearchRequest(prompt=prompt, public_address=public_address)
 
     @staticmethod
@@ -170,7 +144,7 @@ class AliceOrganizationSearchService:
                 for match in _SECTION_PATTERN.finditer(text)
             ]
             raise AliceResponseError(
-                "Алиса должна вернуть девять отдельных шапок. "
+                "Google AI должен вернуть девять отдельных шапок. "
                 f"Распознаны разделители: {marker_numbers or 'нет'}, "
                 f"номера: {found or 'нет'}."
             )
@@ -219,7 +193,7 @@ class AliceOrganizationSearchService:
     @staticmethod
     def assemble_tagged_blocks(blocks: dict[int, str]) -> str:
         if set(blocks) != set(range(1, 10)):
-            raise AliceResponseError("Собраны не все девять шапок Алисы.")
+            raise AliceResponseError("Собраны не все девять шапок Google AI.")
         return "\n".join(
             (
                 _BEGIN_MARKER,
@@ -256,6 +230,7 @@ class AliceOrganizationSearchService:
             for line in values["RECIPIENT"].splitlines()
             if cls._clean_line(line)
         )
+        recipient = cls._normalize_recipient_layout(recipient, organization_type)
         postal_address = " ".join(values["ADDRESS"].split()).strip(" ,")
         phones = cls._phones(values["PHONE"])
         email_text = cls._normalized_email_text(values["EMAIL"])
@@ -274,11 +249,11 @@ class AliceOrganizationSearchService:
 
         status = "needs_review" if missing else "auto_found"
         note = (
-            "Ответ Алисы требует проверки: не найдено: "
+            "Ответ Google AI требует проверки: не найдено: "
             + ", ".join(missing)
             + "."
             if missing
-            else "Шапка найдена Alice AI по адресу регистрации."
+            else "Шапка найдена Google AI Mode по адресу регистрации."
         )
         return Organization(
             id=None,
@@ -287,7 +262,7 @@ class AliceOrganizationSearchService:
             postal_address=postal_address,
             phones=phones,
             email=email,
-            source_url="https://alice.yandex.ru/",
+            source_url="https://www.google.com/search?udm=50",
             verification_status=status,
             verified_at="",
             verification_note=note,
@@ -328,7 +303,7 @@ class AliceOrganizationSearchService:
                 )
         if problems:
             raise AliceResponseError(
-                "Алиса не указала обязательные контакты — "
+                "Google AI не указал обязательные контакты — "
                 + "; ".join(problems)
                 + ". Повторите поиск: минимум один телефон нужен для "
                 "каждой шапки."
@@ -360,7 +335,7 @@ class AliceOrganizationSearchService:
         )
         if repeated >= 4 or subject_copies >= 4:
             raise AliceResponseError(
-                "Алиса скопировала адрес субъекта или один и тот же адрес "
+                "Google AI скопировал адрес субъекта или один и тот же адрес "
                 "сразу в несколько организаций. Нужен повторный поиск "
                 "собственных реквизитов каждой организации."
             )
@@ -501,13 +476,13 @@ class AliceOrganizationSearchService:
         begin = text.rfind(_BEGIN_MARKER)
         if end < 0:
             if begin >= 0:
-                raise AliceResponseError("Ответ Алисы ещё не завершён.")
+                raise AliceResponseError("Ответ Google AI ещё не завершён.")
             return text.strip()
         tail = text[end + len(_END_MARKER):].strip()
         if cls._unnumbered_header_blocks(tail):
             return tail
         if begin > end:
-            raise AliceResponseError("Ответ Алисы ещё не завершён.")
+            raise AliceResponseError("Ответ Google AI ещё не завершён.")
 
         previous_end = text.rfind(_END_MARKER, 0, end)
         if begin >= 0 and begin > previous_end:
@@ -556,7 +531,10 @@ class AliceOrganizationSearchService:
             ),
             len(lines),
         )
-        recipient = "\n".join(lines[:address_index]).strip()
+        recipient = cls._normalize_recipient_layout(
+            "\n".join(lines[:address_index]).strip(),
+            organization_type,
+        )
         postal_address = " ".join(lines[address_index:contact_index]).strip(" ,")
         contact_text = "\n".join(lines[contact_index:])
         phones = cls._phones(contact_text)
@@ -577,11 +555,11 @@ class AliceOrganizationSearchService:
 
         status = "needs_review" if missing else "auto_found"
         note = (
-            "Ответ Алисы требует проверки: не найдено: "
+            "Ответ Google AI требует проверки: не найдено: "
             + ", ".join(missing)
             + "."
             if missing
-            else "Шапка найдена Alice AI по адресу регистрации."
+            else "Шапка найдена Google AI Mode по адресу регистрации."
         )
         return Organization(
             id=None,
@@ -590,7 +568,7 @@ class AliceOrganizationSearchService:
             postal_address=postal_address,
             phones=phones,
             email=email,
-            source_url="https://alice.yandex.ru/",
+            source_url="https://www.google.com/search?udm=50",
             verification_status=status,
             verified_at="",
             verification_note=note,
@@ -668,6 +646,97 @@ class AliceOrganizationSearchService:
         value = value.replace("**", "").replace("__", "").replace("`", "")
         return " ".join(value.split()).strip()
 
+    @staticmethod
+    def _normalize_recipient_layout(
+        value: str,
+        organization_type: OrganizationType | None = None,
+    ) -> str:
+        """Separate and normalize Google's salutation/organization layout."""
+
+        formatted = value
+        salutations = (
+            "военному комиссару",
+            "военному коменданту",
+            "главному врачу",
+            "директору",
+            "главе",
+            "начальнику",
+            "председателю",
+        )
+        if "\n" not in formatted and "," in formatted:
+            first, remainder = (part.strip() for part in value.split(",", 1))
+            normalized = first.casefold().replace("ё", "е")
+            if remainder and normalized.startswith(salutations):
+                formatted = f"{first}\n{remainder}"
+
+        if organization_type is None:
+            return formatted
+        boundaries = {
+            OrganizationType.MILITARY_COMMISSARIAT: r"\bВоенн(?:ый|ого)\s+комиссариат\b",
+            OrganizationType.MILITARY_COMMANDANT: r"\bВоенн(?:ая|ой)\s+комендатур(?:а|ы)\b",
+            OrganizationType.NARCOLOGY: r"\b(?:ГБУЗ|ГАУЗ|ФГБУ|ГБУ|Наркологическ\w*)\b",
+            OrganizationType.PSYCHIATRY: r"\b(?:ГБУЗ|ГАУЗ|ФГБУ|ГБУ|Психиатрическ\w*)\b",
+            OrganizationType.HOSPITAL: r"\b(?:ГБУЗ|ГАУЗ|ФГБУ|ГБУ|ГКБ|ЦРБ|ЦГБ|КОБ|ОКБ)\b",
+            OrganizationType.TFOMS: r"\b(?:ТФОМС|МГФОМС|Территориальн\w*)\b",
+            OrganizationType.ADMINISTRATION: r"\b(?:Администраци\w*|Управ\w*|Правительств\w*)\b",
+            OrganizationType.CONTRACT_SERVICE_POINT: r"\b(?:Единый\s+)?Пункт\s+отбора\b",
+            OrganizationType.ELECTION_COMMISSION: r"\b(?:Территориальн\w+|Московск\w+)\s+(?:городск\w+\s+)?избирательн\w+\s+комисси\w+\b",
+        }
+        if "\n" not in formatted:
+            match = re.search(
+                boundaries[organization_type],
+                formatted,
+                re.IGNORECASE,
+            )
+            if match and match.start() > 0:
+                formatted = (
+                    f"{formatted[:match.start()].strip()}\n"
+                    f"{formatted[match.start():].strip()}"
+                )
+
+        required_salutation = {
+            OrganizationType.MILITARY_COMMISSARIAT: "Военному комиссару",
+            OrganizationType.MILITARY_COMMANDANT: "Военному коменданту",
+            OrganizationType.NARCOLOGY: "Главному врачу",
+            OrganizationType.PSYCHIATRY: "Главному врачу",
+            OrganizationType.HOSPITAL: "Главному врачу",
+            OrganizationType.TFOMS: "Директору",
+            OrganizationType.ADMINISTRATION: "Главе",
+            OrganizationType.CONTRACT_SERVICE_POINT: "Начальнику",
+            OrganizationType.ELECTION_COMMISSION: "Председателю",
+        }[organization_type]
+        lines = [line.strip() for line in formatted.splitlines() if line.strip()]
+        if len(lines) >= 2:
+            lines[0] = required_salutation
+            cls_prefixes = {
+                OrganizationType.MILITARY_COMMISSARIAT: (
+                    "военного комиссариата",
+                    re.compile(
+                        r"^военн(?:ый|ого)\s+комиссариат(?:а)?\s*",
+                        re.IGNORECASE,
+                    ),
+                ),
+                OrganizationType.MILITARY_COMMANDANT: (
+                    "военной комендатуры",
+                    re.compile(
+                        r"^военн(?:ая|ой)\s+комендатур(?:а|ы)\s*",
+                        re.IGNORECASE,
+                    ),
+                ),
+            }
+            prefix_rule = cls_prefixes.get(organization_type)
+            if len(lines) >= 3 and prefix_rule is not None:
+                constant_line, repeated_prefix = prefix_rule
+                normalized_second = lines[1].casefold().replace("ё", "е")
+                if normalized_second == constant_line:
+                    remainder = repeated_prefix.sub("", lines[2]).strip(" ,")
+                    if remainder:
+                        lines[2] = remainder
+                    else:
+                        del lines[2]
+            return "\n".join(lines)
+        return formatted
+
     @classmethod
     def _drop_category_caption(
         cls,
@@ -736,3 +805,11 @@ class AliceOrganizationSearchService:
             OrganizationType.MILITARY_COMMANDANT,
             OrganizationType.CONTRACT_SERVICE_POINT,
         })
+
+
+# Public Google names are used by the application.  The legacy aliases remain
+# available so existing saved installations and third-party imports do not
+# break during the migration from Alice AI.
+GoogleResponseError = AliceResponseError
+GoogleSearchRequest = AliceSearchRequest
+GoogleOrganizationSearchService = AliceOrganizationSearchService

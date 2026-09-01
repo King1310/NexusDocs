@@ -23,6 +23,7 @@ class _StatusLabel:
 def test_completed_answer_is_accepted_even_if_page_is_still_dynamic():
     outcome = object()
     poll_timer = _StopTarget()
+    fill_timer = _StopTarget()
     timeout_timer = _StopTarget()
     accepted = []
     dialog = SimpleNamespace(
@@ -35,6 +36,7 @@ def test_completed_answer_is_accepted_even_if_page_is_still_dynamic():
         outcome=None,
         error_message="",
         poll_timer=poll_timer,
+        fill_timer=fill_timer,
         timeout_timer=timeout_timer,
         status_label=_StatusLabel(),
         accept=lambda: accepted.append(True),
@@ -51,8 +53,9 @@ def test_completed_answer_is_accepted_even_if_page_is_still_dynamic():
 
     assert dialog.outcome is outcome
     assert poll_timer.stopped
+    assert fill_timer.stopped
     assert timeout_timer.stopped
-    assert dialog.status_label.text == "Результат Алисы получен и разобран."
+    assert dialog.status_label.text == "Результат Google AI получен и разобран."
     assert accepted == [True]
 
 
@@ -131,7 +134,7 @@ def test_manual_collection_reports_an_invalid_finished_answer():
     assert "пока нельзя безопасно сохранить" in dialog.status_label.text
 
 
-def test_prompt_markers_do_not_finish_search_while_alice_is_still_working():
+def test_prompt_markers_do_not_finish_search_while_google_is_still_working():
     poll_timer = _StopTarget()
     timeout_timer = _StopTarget()
     dialog = SimpleNamespace(
@@ -171,7 +174,7 @@ def test_prompt_markers_do_not_finish_search_while_alice_is_still_working():
     assert dialog.error_message == ""
 
 
-def test_frame_payloads_are_combined_for_nested_alice_content():
+def test_frame_payloads_are_combined_for_nested_google_content():
     combined = AliceOrganizationSearchDialog._merge_frame_payloads(
         [
             {"text": "оболочка страницы", "generating": False},
@@ -212,3 +215,28 @@ def test_numbered_frame_payload_is_kept_after_plain_text_copy():
     )
 
     assert combined["text"] == numbered
+
+
+def test_google_answer_candidate_wins_over_page_text_containing_the_prompt():
+    answer = (
+        "[[NEXUSDOCS_BEGIN]]\n"
+        + "\n".join(
+            f"[[NEXUSDOCS_HEADER_{number}]]\nШапка {number}"
+            for number in range(1, 10)
+        )
+        + "\n[[NEXUSDOCS_END]]"
+    )
+    page_text = "Полный строгий запрос с примерами\n" + answer + "\nИнтерфейс Google"
+
+    combined = AliceOrganizationSearchDialog._merge_frame_payloads(
+        [
+            {
+                "text": page_text,
+                "candidateTexts": [answer],
+                "generating": False,
+                "completed": True,
+            }
+        ]
+    )
+
+    assert combined["text"] == answer

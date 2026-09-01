@@ -27,8 +27,8 @@ from database.repositories.person_repository import PersonRepository
 from database.repositories.territory_repository import TerritoryRepository
 from domain.entities.territory import Territory
 from domain.enums.organization_type import OrganizationType
-from services.alice_organization_search_service import (
-    AliceOrganizationSearchService,
+from services.google_organization_search_service import (
+    GoogleOrganizationSearchService,
 )
 from services.generation_service import GenerationService
 from services.territory_service import HeaderResolution, TerritoryService
@@ -36,8 +36,8 @@ from services.word_bundle_service import WordBundleService
 from utils.declension import decline_full_name, rank_genitive
 
 from ui.form_data import PersonFormData
-from ui.alice_organization_search_dialog import (
-    AliceOrganizationSearchDialog,
+from ui.google_organization_search_dialog import (
+    GoogleOrganizationSearchDialog,
 )
 from ui.organization_window import OrganizationWindow
 
@@ -224,7 +224,7 @@ class PersonListWindow(QDialog):
         )
 
         self.internet_headers_button = QPushButton(
-            "Найти / обновить шапки через Алису AI"
+            "Найти / обновить шапки через Google AI"
         )
 
         self.generate_button = QPushButton(
@@ -804,7 +804,8 @@ class PersonListWindow(QDialog):
             sections.append(
                 f"{index}. {organization.organization_type.value}\n"
                 f"{self.generation_service._simple_recipient_header(organization)}\n"
-                f"Статус: {organization.verification_status}"
+                "Статус: "
+                f"{self._verification_status_label(organization.verification_status)}"
             )
 
         if resolution.missing_types:
@@ -821,6 +822,19 @@ class PersonListWindow(QDialog):
             title,
             "\n\n".join(sections),
         )
+
+    @staticmethod
+    def _verification_status_label(status: str) -> str:
+        """Return a readable label without changing the stored status."""
+
+        return {
+            "auto_found": "найдено автоматически",
+            "needs_review": "требует проверки",
+            "user_verified": "проверено пользователем",
+            "verified": "проверено",
+            "official": "официальный источник",
+            "unverified": "не проверено",
+        }.get(status, status)
 
     def find_headers_online(self) -> None:
         """Find all nine headers again, even when a set is already cached."""
@@ -956,7 +970,7 @@ class PersonListWindow(QDialog):
         if not targets:
             return resolution
 
-        outcome = self._run_alice_search(person)
+        outcome = self._run_google_search(person)
         if outcome is None:
             return None
 
@@ -1008,7 +1022,7 @@ class PersonListWindow(QDialog):
 
     @staticmethod
     def _search_candidates_for_database(candidates):
-        """Keep complete Alice candidates and discard synthetic placeholders."""
+        """Keep complete AI candidates and discard synthetic placeholders."""
 
         return [
             organization
@@ -1020,19 +1034,19 @@ class PersonListWindow(QDialog):
             )
         ]
 
-    def _run_alice_search(self, person):
-        """Ask for permission, run Alice's web UI and return nine headers."""
+    def _run_google_search(self, person):
+        """Ask for permission, run Google AI Mode and return nine headers."""
 
         public_address = (
-            AliceOrganizationSearchService.public_registration_address(
+            GoogleOrganizationSearchService.public_registration_address(
                 person.registration_address
             )
         )
         answer = QMessageBox.question(
             self,
-            "Поиск через Алису AI",
+            "Поиск через Google AI",
             (
-                "Для поиска девяти организаций в Алису будет отправлен "
+                "Для поиска девяти организаций в Google будет отправлен "
                 "адрес регистрации без номера квартиры:\n\n"
                 f"{public_address}\n\n"
                 "ФИО, паспортные данные и сведения о деле не передаются.\n\n"
@@ -1046,8 +1060,8 @@ class PersonListWindow(QDialog):
         if answer != QMessageBox.StandardButton.Yes:
             return None
 
-        service = AliceOrganizationSearchService()
-        dialog = AliceOrganizationSearchDialog(
+        service = GoogleOrganizationSearchService()
+        dialog = GoogleOrganizationSearchDialog(
             person.registration_address,
             parent=self,
             response_parser=(

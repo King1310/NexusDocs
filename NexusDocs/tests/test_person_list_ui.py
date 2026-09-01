@@ -35,6 +35,7 @@ def test_person_table_window_is_resizable_and_has_no_obsolete_buttons():
     assert not hasattr(window, "headers_button")
     assert not hasattr(window, "export_pdf_button")
     assert not hasattr(window, "export_documents_to_pdf")
+    assert "Google AI" in window.internet_headers_button.text()
 
 
 def test_id_and_last_name_columns_sort_in_both_directions():
@@ -85,3 +86,12 @@ def test_independent_people_window_uses_form_opener_callback():
 
     assert window.parent() is None
     assert calls == [{}]
+
+
+def test_internal_header_status_has_readable_ui_label():
+    assert PersonListWindow._verification_status_label("auto_found") == (
+        "найдено автоматически"
+    )
+    assert PersonListWindow._verification_status_label("needs_review") == (
+        "требует проверки"
+    )

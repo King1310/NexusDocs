@@ -18,30 +18,34 @@ from PySide6.QtWidgets import (
 )
 
 from domain.value_objects.address import Address
-from services.alice_organization_search_service import (
-    AliceOrganizationSearchService,
-    AliceSearchRequest,
-    AliceResponseError,
+from services.google_organization_search_service import (
+    GoogleOrganizationSearchService,
+    GoogleSearchRequest,
+    GoogleResponseError,
 )
 
 
-class AliceOrganizationSearchDialog(QDialog):
-    """Run the strict nine-header request in Alice's free web interface."""
+class GoogleOrganizationSearchDialog(QDialog):
+    """Run the strict nine-header request in Google AI Mode."""
 
     SEARCH_TIMEOUT_MS = 180_000
     POLL_INTERVAL_MS = 1_500
+    GOOGLE_AI_URL = (
+        "https://www.google.com/search?sourceid=chrome&ie=UTF-8&amc=1"
+        "&udm=50&aep=48&cud=0&source=chrome.crn.obic&atvm=2&hl=ru"
+    )
 
     def __init__(
         self,
         address: Address,
         parent=None,
         *,
-        request: AliceSearchRequest | None = None,
+        request: GoogleSearchRequest | None = None,
         response_parser=None,
         result_description: str = "все девять шапок",
     ):
         super().__init__(parent)
-        self.service = AliceOrganizationSearchService()
+        self.service = GoogleOrganizationSearchService()
         self.request = request or self.service.build_request(address)
         self.response_parser = response_parser or self.service.parse_response
         self.result_description = result_description
@@ -53,13 +57,13 @@ class AliceOrganizationSearchDialog(QDialog):
         self._stable_poll_count = 0
         self._tagged_blocks: dict[int, str] = {}
 
-        self.setWindowTitle("Поиск девяти шапок через Алису AI")
+        self.setWindowTitle("Поиск девяти шапок через Google AI")
         self.resize(1180, 780)
         self.setMinimumSize(900, 620)
 
         layout = QVBoxLayout(self)
         self.status_label = QLabel(
-            "Открываю Алису AI. Если Яндекс попросит войти или показать, "
+            "Открываю режим ИИ Google. Если Google попросит войти или показать, "
             "что вы не робот, выполните это прямо в окне ниже."
         )
         self.status_label.setWordWrap(True)
@@ -95,22 +99,27 @@ class AliceOrganizationSearchDialog(QDialog):
         self.poll_timer.setInterval(self.POLL_INTERVAL_MS)
         self.poll_timer.timeout.connect(self._poll_page)
 
+        self.fill_timer = QTimer(self)
+        self.fill_timer.setInterval(1_000)
+        self.fill_timer.timeout.connect(self._fill_prompt)
+        self.fill_timer.start()
+
         self.timeout_timer = QTimer(self)
         self.timeout_timer.setSingleShot(True)
         self.timeout_timer.timeout.connect(self._on_timeout)
         self.timeout_timer.start(self.SEARCH_TIMEOUT_MS)
 
-        self.web_view.setUrl(QUrl("https://alice.yandex.ru/"))
+        self.web_view.setUrl(QUrl(self.GOOGLE_AI_URL))
 
     def _persistent_profile(self) -> QWebEngineProfile:
-        profile = QWebEngineProfile("NexusDocsAlice", self)
+        profile = QWebEngineProfile("NexusDocsGoogleAI", self)
         app_data = Path(
             QStandardPaths.writableLocation(
                 QStandardPaths.StandardLocation.AppDataLocation
             )
         )
-        profile_dir = app_data / "alice_browser_profile"
-        cache_dir = app_data / "alice_browser_cache"
+        profile_dir = app_data / "google_ai_browser_profile"
+        cache_dir = app_data / "google_ai_browser_cache"
         profile_dir.mkdir(parents=True, exist_ok=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
         profile.setPersistentStoragePath(str(profile_dir))
@@ -123,12 +132,13 @@ class AliceOrganizationSearchDialog(QDialog):
     def _on_load_finished(self, succeeded: bool) -> None:
         if not succeeded:
             self.status_label.setText(
-                "Страница Алисы не загрузилась. Проверьте интернет и нажмите "
+                "Страница Google AI не загрузилась. Проверьте интернет и нажмите "
                 "«Отправить заново»."
             )
             return
         if not self._sent:
-            QTimer.singleShot(1_000, self._fill_prompt)
+            self.fill_timer.start()
+            QTimer.singleShot(500, self._fill_prompt)
 
     def _fill_prompt(self) -> None:
         if self._sent:
@@ -136,10 +146,27 @@ class AliceOrganizationSearchDialog(QDialog):
         prompt_json = json.dumps(self.request.prompt, ensure_ascii=False)
         script = f"""
         (() => {{
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const consent = buttons.find(button => {{
+                const label = (
+                    button.getAttribute('aria-label') ||
+                    button.innerText || ''
+                ).trim().toLowerCase();
+                return label === 'отклонить все'
+                    || label === 'reject all'
+                    || label === 'alles afwijzen'
+                    || label === 'alle ablehnen';
+            }});
+            if (consent) {{
+                consent.click();
+                return 'consent';
+            }}
             const input = document.querySelector(
-                'textarea[placeholder="Спросите о чём угодно"]'
+                'textarea[placeholder="Задайте вопрос"], '
+                + 'textarea[placeholder="Ask anything"], '
+                + 'textarea[name="q"], textarea[maxlength="8192"]'
             );
-            if (!input) return false;
+            if (!input) return 'missing';
             const setter = Object.getOwnPropertyDescriptor(
                 window.HTMLTextAreaElement.prototype, 'value'
             ).set;
@@ -147,21 +174,27 @@ class AliceOrganizationSearchDialog(QDialog):
             input.dispatchEvent(new Event('input', {{bubbles: true}}));
             input.dispatchEvent(new Event('change', {{bubbles: true}}));
             input.focus();
-            return true;
+            return 'filled';
         }})()
         """
         self.page.runJavaScript(script, self._after_prompt_filled)
 
     def _after_prompt_filled(self, filled) -> None:
-        if not filled:
+        if filled == "consent":
             self.status_label.setText(
-                "Ожидаю поле ввода Алисы. При необходимости войдите в "
-                "Яндекс ID, затем нажмите «Отправить заново»."
+                "Google показал окно cookies. Закрываю его и продолжаю поиск…"
+            )
+            return
+        if filled not in (True, "filled"):
+            self.status_label.setText(
+                "Ожидаю поле ввода Google AI. При необходимости войдите в "
+                "аккаунт Google, затем нажмите «Отправить заново»."
             )
             return
         self._prompt_filled = True
+        self.fill_timer.stop()
         self.status_label.setText(
-            "Строгий запрос подготовлен. Отправляю его Алисе AI…"
+            "Строгий запрос подготовлен. Отправляю его в Google AI…"
         )
         QTimer.singleShot(500, self._click_send)
 
@@ -177,7 +210,10 @@ class AliceOrganizationSearchDialog(QDialog):
                     button.getAttribute('title') ||
                     button.innerText || ''
                 ).trim().toLowerCase();
-                return label === 'отправить' || label.includes('отправить запрос');
+                return label === 'отправить'
+                    || label.includes('отправить запрос')
+                    || label === 'send'
+                    || label.includes('send prompt');
             });
             if (!send || send.disabled) return false;
             send.click();
@@ -189,19 +225,20 @@ class AliceOrganizationSearchDialog(QDialog):
     def _after_send(self, sent) -> None:
         if not sent:
             self.status_label.setText(
-                "Алиса пока не готова принять запрос. Проверьте окно ниже "
+                "Google AI пока не готов принять запрос. Проверьте окно ниже "
                 "и нажмите «Отправить заново»."
             )
             return
         self._sent = True
+        self.fill_timer.stop()
         self.status_label.setText(
-            f"Алиса выполняет поиск. Жду {self.result_description}…"
+            f"Google AI выполняет поиск. Жду {self.result_description}…"
         )
         self.poll_timer.start()
 
     def _poll_page(self, force: bool = False) -> None:
         if force:
-            self.status_label.setText("Считываю готовый ответ Алисы…")
+            self.status_label.setText("Считываю готовый ответ Google AI…")
         script = """
             (() => {
                 if (!document.body) {
@@ -211,55 +248,69 @@ class AliceOrganizationSearchDialog(QDialog):
                 try {
                     const rawText = document.body.innerText
                         || document.body.textContent || '';
-                    let text = rawText;
-                    try {
-                        const clone = document.body.cloneNode(true);
-                        clone.querySelectorAll('ol').forEach(list => {
-                            let nextNumber = Number(
-                                list.getAttribute('start') || 1
-                            );
-                            const items = Array.from(
-                                list.querySelectorAll('li')
-                            ).filter(item => item.closest('ol') === list);
-                            items.forEach(item => {
-                                const valueAttribute = item.getAttribute('value');
-                                const explicit = valueAttribute === null
-                                    ? Number.NaN
-                                    : Number(valueAttribute);
-                                const number = Number.isFinite(explicit)
-                                    ? explicit
-                                    : nextNumber;
-                                const marker = document.createElement('span');
-                                marker.textContent = `${number})\n`;
-                                item.prepend(marker);
-                                nextNumber = number + 1;
-                            });
-                        });
-                        text = clone.innerText || clone.textContent || rawText;
-                    } catch (_cloneError) {
-                        text = rawText;
-                    }
-                    const generating = Array.from(
+                    const buttons = Array.from(
                         document.querySelectorAll('button')
-                    ).some(button => {
+                    );
+                    const buttonLabel = button => (
+                        button.getAttribute('aria-label') ||
+                        button.getAttribute('title') ||
+                        button.innerText || ''
+                    ).trim().toLowerCase();
+                    const isVisible = element => {
+                        const style = window.getComputedStyle(element);
+                        return element.getClientRects().length > 0
+                            && style.display !== 'none'
+                            && style.visibility !== 'hidden';
+                    };
+                    const generating = buttons.some(button => {
                         const style = window.getComputedStyle(button);
                         const visible = button.getClientRects().length > 0
                             && style.display !== 'none'
                             && style.visibility !== 'hidden';
                         if (!visible) return false;
-                        const label = (
-                            button.getAttribute('aria-label') ||
-                            button.getAttribute('title') ||
-                            button.innerText || ''
-                        ).trim().toLowerCase();
+                        const label = buttonLabel(button);
                         return label.includes('остановить')
                             || label === 'стоп'
-                            || label.endsWith(', стоп')
-                            || label.includes('alice, stop');
+                            || label === 'stop';
                     });
-                    const completed = /^[\\t ]*\\[\\[NEXUSDOCS_END\\]\\][\\t ]*$/m
-                        .test(text);
-                    return {text, generating, completed, error: ''};
+                    const copyButtons = buttons.filter(button => {
+                        if (!isVisible(button)) return false;
+                        const label = buttonLabel(button);
+                        return label === 'скопировать текст'
+                            || label === 'copy text';
+                    });
+                    const answerCandidates = [];
+                    copyButtons.forEach(button => {
+                        let element = button;
+                        for (let level = 0; level < 10 && element; level += 1) {
+                            const text = element.innerText
+                                || element.textContent || '';
+                            if (text.includes('[[NEXUSDOCS_END]]')) {
+                                answerCandidates.push(text);
+                            }
+                            element = element.parentElement;
+                        }
+                    });
+                    answerCandidates.sort((left, right) => {
+                        const leftComplete = left.includes('[[NEXUSDOCS_BEGIN]]')
+                            && left.includes('[[NEXUSDOCS_HEADER_9]]');
+                        const rightComplete = right.includes('[[NEXUSDOCS_BEGIN]]')
+                            && right.includes('[[NEXUSDOCS_HEADER_9]]');
+                        if (leftComplete !== rightComplete) {
+                            return leftComplete ? -1 : 1;
+                        }
+                        return left.length - right.length;
+                    });
+                    const text = answerCandidates[0] || rawText;
+                    const completed = copyButtons.length > 0
+                        && text.includes('[[NEXUSDOCS_END]]');
+                    return {
+                        text,
+                        candidateTexts: answerCandidates,
+                        generating,
+                        completed,
+                        error: '',
+                    };
                 } catch (error) {
                     return {
                         text: document.body.innerText
@@ -331,7 +382,7 @@ class AliceOrganizationSearchDialog(QDialog):
 
     @staticmethod
     def _merge_frame_payloads(payloads) -> dict:
-        """Combine visible text collected inside all Alice web frames."""
+        """Combine visible text collected from the Google AI page."""
 
         texts: list[str] = []
         errors: list[str] = []
@@ -340,6 +391,7 @@ class AliceOrganizationSearchDialog(QDialog):
         for payload in payloads:
             if isinstance(payload, dict):
                 text = payload.get("text", "")
+                payload_candidates = payload.get("candidateTexts") or []
                 generating = generating or bool(payload.get("generating"))
                 completed = completed or bool(payload.get("completed"))
                 error = str(payload.get("error") or "").strip()
@@ -347,9 +399,17 @@ class AliceOrganizationSearchDialog(QDialog):
                     errors.append(error)
             else:
                 text = payload
+                payload_candidates = []
+            for candidate in payload_candidates:
+                if (
+                    isinstance(candidate, str)
+                    and candidate.strip()
+                    and candidate not in texts
+                ):
+                    texts.append(candidate)
             if isinstance(text, str) and text.strip() and text not in texts:
                 texts.append(text)
-        texts.sort(key=AliceOrganizationSearchDialog._payload_text_score)
+        texts.sort(key=GoogleOrganizationSearchDialog._payload_text_score)
         return {
             "text": texts[-1] if texts else "",
             "candidate_texts": texts,
@@ -376,11 +436,11 @@ class AliceOrganizationSearchDialog(QDialog):
             )
         }
         return (
-            int(AliceOrganizationSearchService.has_completed_answer(value)),
+            int(GoogleOrganizationSearchService.has_completed_answer(value)),
             int(header_markers == set(range(1, 10))),
             len(header_markers),
             int(numbers == set(range(1, 10))),
-            len(value),
+            -len(value),
         )
 
     def _inspect_page_text(self, payload, *, force: bool = False) -> None:
@@ -398,14 +458,14 @@ class AliceOrganizationSearchDialog(QDialog):
             polling_error = ""
         if polling_error:
             self.status_label.setText(
-                "Не удалось автоматически считать ответ Алисы: "
+                "Не удалось автоматически считать ответ Google AI: "
                 f"{polling_error}. Нажмите «Забрать готовые шапки»."
             )
         if not isinstance(page_text, str) or not page_text:
             if force and not polling_error:
                 self.status_label.setText(
-                    "Алиса не разрешила приложению прочитать страницу. "
-                    "Нажмите значок копирования под её ответом, затем снова "
+                    "Google AI не разрешил приложению прочитать страницу. "
+                    "Нажмите «Скопировать текст» под ответом, затем снова "
                     "нажмите «Забрать готовые шапки»."
                 )
             return
@@ -435,16 +495,15 @@ class AliceOrganizationSearchDialog(QDialog):
         normalized = page_text.casefold().replace("ё", "е")
         if "подтвердите, что вы не робот" in normalized or "captcha" in normalized:
             self.status_label.setText(
-                "Яндекс запросил проверку. Пройдите её в окне Алисы; после "
+                "Google запросил проверку. Пройдите её в окне Google AI; после "
                 "этого поиск продолжится."
             )
             return
         try:
             outcome = self.response_parser(page_text)
-        except AliceResponseError as error:
-            # Alice changes the stop control and its accessible label often.
-            # More importantly, the user's prompt itself contains the complete
-            # protocol and is visible on the page while Alice is still writing.
+        except GoogleResponseError as error:
+            # The user's prompt itself contains the complete protocol and may
+            # be visible on the page while Google AI is still writing.
             # Therefore an invalid automatic snapshot is never authoritative:
             # keep polling until a complete response parses successfully.  A
             # manual collection is explicit and may report the parse error.
@@ -454,19 +513,21 @@ class AliceOrganizationSearchDialog(QDialog):
             self.timeout_timer.stop()
             self.error_message = str(error)
             self.status_label.setText(
-                "Готовый ответ Алисы пока нельзя безопасно сохранить: "
+                "Готовый ответ Google AI пока нельзя безопасно сохранить: "
                 f"{error} Дождитесь конца ответа и нажмите кнопку ещё раз."
             )
             return
 
         self.outcome = outcome
         self.poll_timer.stop()
+        self.fill_timer.stop()
         self.timeout_timer.stop()
-        self.status_label.setText("Результат Алисы получен и разобран.")
+        self.status_label.setText("Результат Google AI получен и разобран.")
         self.accept()
 
     def _retry(self) -> None:
         self.poll_timer.stop()
+        self.fill_timer.start()
         self._prompt_filled = False
         self._sent = False
         self._last_page_text = ""
@@ -475,30 +536,36 @@ class AliceOrganizationSearchDialog(QDialog):
         self.error_message = ""
         self.timeout_timer.start(self.SEARCH_TIMEOUT_MS)
         current = self.web_view.url().toString()
-        if "alice.yandex" not in current:
-            self.web_view.setUrl(QUrl("https://alice.yandex.ru/"))
+        if "google.com/search" not in current or "udm=50" not in current:
+            self.web_view.setUrl(QUrl(self.GOOGLE_AI_URL))
         else:
-            self._fill_prompt()
+            self.web_view.setUrl(QUrl(self.GOOGLE_AI_URL))
 
     def _copy_prompt(self) -> None:
         QGuiApplication.clipboard().setText(self.request.prompt)
         self.status_label.setText(
-            "Строгий запрос скопирован. Его можно вставить в поле Алисы вручную."
+            "Строгий запрос скопирован. Его можно вставить в Google AI вручную."
         )
 
     def _on_timeout(self) -> None:
         self.poll_timer.stop()
+        self.fill_timer.stop()
         self.error_message = (
-            f"Алиса не вернула {self.result_description} за три минуты."
+            f"Google AI не вернул {self.result_description} за три минуты."
         )
         QMessageBox.warning(
             self,
-            "Поиск Алисы не завершён",
+            "Поиск Google AI не завершён",
             self.error_message
             + "\n\nМожно нажать «Отправить заново» или закрыть окно.",
         )
 
     def reject(self) -> None:
         self.poll_timer.stop()
+        self.fill_timer.stop()
         self.timeout_timer.stop()
         super().reject()
+
+
+# Backward-compatible import for extensions written for NexusDocs 1.0.
+AliceOrganizationSearchDialog = GoogleOrganizationSearchDialog

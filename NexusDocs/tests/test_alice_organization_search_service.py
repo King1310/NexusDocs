@@ -133,21 +133,22 @@ def test_prompt_uses_address_without_apartment_and_demands_nine_headers():
 
     assert "д. 12" in request.public_address
     assert "45" not in request.public_address
-    assert "Сделай шапки для организаций" in request.prompt
-    assert "адрес регистрации субъекта" in request.prompt
-    assert "отвечают за этот адрес" in request.prompt
+    assert "Адрес регистрации человека" in request.prompt
+    assert "НЕ адрес организаций" in request.prompt
+    assert "территориально отвечают за этот адрес" in request.prompt
+    assert "официальным источникам" in request.prompt
     assert "собственные официальные реквизиты" in request.prompt
-    assert "Не подставляй адрес субъекта как адрес организации" in request.prompt
-    assert "ФИО руководителей и других людей" in request.prompt
-    assert "для шапок 3, 4, 5, 6, 7 и 9" in request.prompt
-    assert "Без электронной почты допускаются только шапки 1, 2 и 8" in request.prompt
+    assert "ФИО людей не пиши" in request.prompt
+    assert "Для 3, 4, 5, 6, 7 и 9 почта обязательна" in request.prompt
+    assert "Электронную почту обязательно ИЩИ для всех девяти" in request.prompt
+    assert "не пропускай поиск почты" in request.prompt
+    assert "пусто только для 1, 2 и 8" in request.prompt
     assert "ГБУЗ, ГАУЗ, ГКБ, ЦРБ, ЦГБ, КОБ, ОКБ" in request.prompt
-    assert "обязательны во всех девяти шапках" in request.prompt
-    assert "девять полей [[NEXUSDOCS_PHONE]]" in request.prompt
+    assert "Телефон обязателен во всех девяти шапках" in request.prompt
     assert "Нужно ровно 9 шапок" in request.prompt
     assert "[[NEXUSDOCS_BEGIN]]" in request.prompt
     assert "[[NEXUSDOCS_END]]" in request.prompt
-    assert "не используй нумерованный или маркированный Markdown-список" in request.prompt
+    assert "Не используй Markdown-нумерацию" in request.prompt
     assert "[[NEXUSDOCS_HEADER_1]]" in request.prompt
     assert "[[NEXUSDOCS_RECIPIENT]]" in request.prompt
     assert "[[NEXUSDOCS_ADDRESS]]" in request.prompt
@@ -175,6 +176,55 @@ def test_contacts_accept_alice_clipboard_typography():
         contact_text
     )
     assert "spcgb@mail.ru" in normalized_email
+
+
+def test_google_inline_recipient_is_split_into_template_lines():
+    value = "Главному врачу, ГБУЗ «Городская больница»"
+
+    assert AliceOrganizationSearchService._normalize_recipient_layout(value) == (
+        "Главному врачу\nГБУЗ «Городская больница»"
+    )
+
+    flattened = "Главному врачу ГБУЗ «Городская больница»"
+    assert AliceOrganizationSearchService._normalize_recipient_layout(
+        flattened,
+        OrganizationType.HOSPITAL,
+    ) == "Главному врачу\nГБУЗ «Городская больница»"
+
+    assert AliceOrganizationSearchService._normalize_recipient_layout(
+        "Директору\nГБУЗ «Наркологический диспансер»",
+        OrganizationType.NARCOLOGY,
+    ) == "Главному врачу\nГБУЗ «Наркологический диспансер»"
+
+
+def test_google_military_recipient_drops_repeated_organization_prefix():
+    commissariat = (
+        "Военному комиссару\n"
+        "Военного комиссариата\n"
+        "Военный комиссариат города Миасс Челябинской области"
+    )
+    commandant = (
+        "Военному коменданту\n"
+        "Военной комендатуры\n"
+        "Военная комендатура гарнизона 1 разряда г. Челябинск"
+    )
+
+    assert AliceOrganizationSearchService._normalize_recipient_layout(
+        commissariat,
+        OrganizationType.MILITARY_COMMISSARIAT,
+    ) == (
+        "Военному комиссару\n"
+        "Военного комиссариата\n"
+        "города Миасс Челябинской области"
+    )
+    assert AliceOrganizationSearchService._normalize_recipient_layout(
+        commandant,
+        OrganizationType.MILITARY_COMMANDANT,
+    ) == (
+        "Военному коменданту\n"
+        "Военной комендатуры\n"
+        "гарнизона 1 разряда г. Челябинск"
+    )
 
 
 def test_parser_builds_all_nine_organizations_in_protocol_order():
@@ -214,7 +264,7 @@ def test_parser_accepts_tagged_protocol_even_when_alice_flattens_everything():
     )
     assert outcome.organizations[8].email == "tik@example.ru"
     assert all(
-        item.source_url == "https://alice.yandex.ru/"
+        item.source_url == "https://www.google.com/search?udm=50"
         for item in outcome.organizations
     )
 
@@ -279,7 +329,7 @@ def test_address_validation_rejects_copying_subject_address_to_organizations():
     )
     broken_outcome = type(outcome)(copied, outcome.unresolved_types)
 
-    with pytest.raises(AliceResponseError, match="скопировала адрес субъекта"):
+    with pytest.raises(AliceResponseError, match="скопировал адрес субъекта"):
         AliceOrganizationSearchService.validate_outcome_for_address(
             broken_outcome,
             _address(),
