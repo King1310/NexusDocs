@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFormLayout,
     QLineEdit,
@@ -44,12 +45,25 @@ class PersonMilitaryWindow(QDialog):
         form_layout = QFormLayout()
 
         self.military_unit_input = QLineEdit()
+        self.military_deployment_input = QLineEdit()
+        self.service_basis_input = QComboBox()
         self.rank_input = QLineEdit()
         self.position_input = QLineEdit()
         self.military_id_input = QLineEdit()
 
         self.military_unit_input.setPlaceholderText(
             "Например: в/ч 12345"
+        )
+
+        self.military_deployment_input.setPlaceholderText(
+            "Например: г. Ясиноватая ДНР"
+        )
+
+        self.service_basis_input.addItems(
+            [
+                "по контракту",
+                "по мобилизации",
+            ]
         )
 
         self.rank_input.setPlaceholderText(
@@ -67,6 +81,16 @@ class PersonMilitaryWindow(QDialog):
         form_layout.addRow(
             "Воинская часть:",
             self.military_unit_input,
+        )
+
+        form_layout.addRow(
+            "Дислокация в/части:",
+            self.military_deployment_input,
+        )
+
+        form_layout.addRow(
+            "Условия призыва:",
+            self.service_basis_input,
         )
 
         form_layout.addRow(
@@ -111,6 +135,11 @@ class PersonMilitaryWindow(QDialog):
         military = self.form_data.military
 
         self.military_unit_input.setText(military.military_unit)
+        self.military_deployment_input.setText(
+            military.military_deployment
+        )
+        if military.service_basis:
+            self.service_basis_input.setCurrentText(military.service_basis)
         self.rank_input.setText(military.rank)
         self.position_input.setText(military.position)
         self.military_id_input.setText(military.military_id)
@@ -142,6 +171,18 @@ class PersonMilitaryWindow(QDialog):
             .strip()
         )
 
+        military_deployment = (
+            self.military_deployment_input
+            .text()
+            .strip()
+        )
+
+        service_basis = (
+            self.service_basis_input
+            .currentText()
+            .strip()
+        )
+
         rank = (
             self.rank_input
             .text()
@@ -165,6 +206,22 @@ class PersonMilitaryWindow(QDialog):
                 self,
                 "Ошибка",
                 "Введите воинскую часть.",
+            )
+            return
+
+        if not military_deployment:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Введите дислокацию воинской части.",
+            )
+            return
+
+        if not service_basis:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Выберите условия призыва.",
             )
             return
 
@@ -197,6 +254,8 @@ class PersonMilitaryWindow(QDialog):
             rank=rank,
             position=position,
             military_id=military_id,
+            military_deployment=military_deployment,
+            service_basis=service_basis,
         )
 
         self.accept()

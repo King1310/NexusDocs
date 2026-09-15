@@ -66,6 +66,8 @@ class PersonFactory:
                 rank="рядовой",
                 position="стрелок",
                 military_id="АБ1234567",
+                military_deployment="г. Балашиха Московской области",
+                service_basis="по контракту",
             ),
 
             soch_case=SochCase(
@@ -76,6 +78,8 @@ class PersonFactory:
                 case_number="123/2026",
                 procedural_control="Военная прокуратура",
                 article="337 УК РФ",
+                registration_date=date(2026, 7, 25),
+                circumstances="Неявка в срок",
             ),
 
             document_info=DocumentInfo(

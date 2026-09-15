@@ -39,7 +39,8 @@ def test_nine_dynamic_headers_follow_user_examples_exactly():
             "Раменского муниципального округа и городских округов Жуковский "
             "и Бронницы Московской области\n\n"
             "140100, Московская область, г. Раменское, ул. Гурьева, д. 21\n"
-            "тел.: +7 (496) 463-38-48",
+            "тел.: +7 (496) 463-38-48\n"
+            "эл. почта: voenkommo_ramenskoe@mil.ru",
         ),
         OrganizationType.MILITARY_COMMANDANT: (
             _header(

@@ -52,9 +52,13 @@ def create_tables() -> None:
             rank TEXT NOT NULL,
             position TEXT NOT NULL,
             military_id TEXT NOT NULL,
+            military_deployment TEXT,
+            service_basis TEXT,
 
             -- Сведения о СОЧ
             soch_date TEXT NOT NULL,
+            registration_date TEXT,
+            circumstances TEXT,
             soch_place TEXT NOT NULL,
             duration TEXT NOT NULL,
 
@@ -77,5 +81,21 @@ def create_tables() -> None:
         )
         """
     )
+
+    existing_columns = {
+        row[1]
+        for row in cursor.execute("PRAGMA table_info(persons)")
+    }
+    migrations = {
+        "military_deployment": "TEXT",
+        "service_basis": "TEXT",
+        "registration_date": "TEXT",
+        "circumstances": "TEXT",
+    }
+    for column_name, column_type in migrations.items():
+        if column_name not in existing_columns:
+            cursor.execute(
+                f"ALTER TABLE persons ADD COLUMN {column_name} {column_type}"
+            )
 
     connection.commit()

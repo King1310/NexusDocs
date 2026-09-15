@@ -35,6 +35,8 @@ def form_data() -> PersonFormData:
         case_number="123/2026",
         procedural_control="ВУД",
         article="ч. 5 ст. 337 УК РФ",
+        registration_date=date(2026, 7, 25),
+        circumstances="Самовольное оставление части",
     )
     return data
 
@@ -63,6 +65,10 @@ def test_military_window_loads_existing_data(form_data):
     window = PersonMilitaryWindow(form_data)
 
     assert window.military_unit_input.text() == "12345"
+    assert window.military_deployment_input.text() == (
+        "г. Балашиха Московской области"
+    )
+    assert window.service_basis_input.currentText() == "по контракту"
     assert window.rank_input.text() == "рядовой"
     assert window.position_input.text() == "стрелок"
     assert window.military_id_input.text() == "АБ1234567"
@@ -72,6 +78,10 @@ def test_soch_window_loads_existing_data(form_data):
     window = PersonSochWindow(form_data)
 
     assert window.soch_date_input.date().toPython() == date(2026, 7, 20)
+    assert window.registration_date_input.date().toPython() == date(2026, 7, 25)
+    assert window.circumstances_input.currentText() == (
+        "Самовольное оставление части"
+    )
     assert window.soch_place_input.text() == "Балашиха"
     assert window.duration_input.currentText() == "Более 1 месяца"
     assert window.case_type_input.currentText() == "УД"

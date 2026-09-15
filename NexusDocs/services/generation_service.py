@@ -13,7 +13,6 @@ from docx.document import Document as DocumentObject
 from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt
 from docx.table import _Cell, Table
 from docx.text.paragraph import Paragraph
 from lxml import etree
@@ -103,6 +102,10 @@ class GenerationService:
 
         document = Document(template_path)
         replacements = self._build_replacements(person, organization, overrides)
+        if request.number in {10, 11}:
+            replacements["предварительного следствия"] = (
+                self._mvd_proceeding_stage(person)
+            )
         highlighted = self._highlighted_placeholders(organization)
         self._replace_in_container(document, replacements, highlighted)
 
@@ -225,12 +228,21 @@ class GenerationService:
         """Return a unit identifier without a duplicated textual prefix."""
 
         return re.sub(
-            r"^\s*(?:(?:в\s*/\s*(?:ч(?:асти)?|част(?:ь|и)))|"
+            r"^\s*(?:(?:в\s*/\s*(?:ч(?:асть|асти)?|част(?:ь|и)))|"
             r"(?:войсков(?:ая|ой)\s+част(?:ь|и)))\s*(?:№\s*)?",
             "",
             value or "",
             flags=re.IGNORECASE,
         ).strip()
+
+    @staticmethod
+    def _mvd_proceeding_stage(person: Person) -> str:
+        """Return the procedural stage used only in both МВД requests."""
+
+        normalized = str(person.soch_case.case_type).casefold().replace("ё", "е")
+        if normalized.strip() == "уд" or "уголов" in normalized:
+            return "предварительного следствия"
+        return "доследственной проверки"
 
     @classmethod
     def _simple_recipient_header(cls, organization: Organization) -> str:
@@ -276,11 +288,7 @@ class GenerationService:
         )
         if phones:
             contact_lines.append("тел.: " + ",\n".join(phones))
-        if (
-            organization.organization_type
-            not in cls._email_optional_types()
-            and organization.email
-        ):
+        if organization.email:
             email = cls._clean_header_line(organization.email)
             if email and "требует провер" not in email.casefold():
                 contact_lines.append(f"эл. почта: {email}")
@@ -288,14 +296,6 @@ class GenerationService:
         if recipient_block and contact_lines:
             return recipient_block + "\n\n" + "\n".join(contact_lines)
         return recipient_block or "\n".join(contact_lines)
-
-    @staticmethod
-    def _email_optional_types() -> frozenset[OrganizationType]:
-        return frozenset({
-            OrganizationType.MILITARY_COMMISSARIAT,
-            OrganizationType.MILITARY_COMMANDANT,
-            OrganizationType.CONTRACT_SERVICE_POINT,
-        })
 
     @classmethod
     def _canonical_recipient_lines(
@@ -307,24 +307,34 @@ class GenerationService:
 
         if organization_type is OrganizationType.MILITARY_COMMISSARIAT:
             details = [
-                line
+                cls._strip_repeated_military_organization(
+                    line,
+                    OrganizationType.MILITARY_COMMISSARIAT,
+                )
                 for line in lines
                 if not re.match(
                     r"(?i)^военному комиссару$|^военного комиссариата$",
                     line,
                 )
             ]
+            details = [line for line in details if line]
             return ["Военному комиссару", "Военного комиссариата", *details]
 
         if organization_type is OrganizationType.MILITARY_COMMANDANT:
             details = [
-                cls._sentence_case_if_upper(line)
+                cls._sentence_case_if_upper(
+                    cls._strip_repeated_military_organization(
+                        line,
+                        OrganizationType.MILITARY_COMMANDANT,
+                    )
+                )
                 for line in lines
                 if not re.match(
                     r"(?i)^военному коменданту$|^военной комендатуры$",
                     line,
                 )
             ]
+            details = [line for line in details if line]
             return ["Военному коменданту", "Военной комендатуры", *details]
 
         if organization_type is OrganizationType.TFOMS:
@@ -434,6 +444,30 @@ class GenerationService:
             ]
 
         return lines
+
+    @staticmethod
+    def _strip_repeated_military_organization(
+        value: str,
+        organization_type: OrganizationType,
+    ) -> str:
+        """Remove a repeated organization label but keep its territory."""
+
+        patterns = {
+            OrganizationType.MILITARY_COMMISSARIAT: (
+                r"^(?:(?:объедин[её]нн(?:ый|ого)|межрайонн(?:ый|ого)|"
+                r"районн(?:ый|ого)|городск(?:ой|ого))\s+)*"
+                r"военн(?:ый|ого)\s+комиссариат(?:а)?\s*"
+            ),
+            OrganizationType.MILITARY_COMMANDANT: (
+                r"^военн(?:ая|ой)\s+"
+                r"(?:(?:автомобильн(?:ая|ой)|территориальн(?:ая|ой))\s+)*"
+                r"комендатур(?:а|ы)\s*"
+            ),
+        }
+        pattern = patterns.get(organization_type)
+        if pattern is None:
+            return value
+        return re.sub(pattern, "", value, flags=re.IGNORECASE).strip(" ,")
 
     @staticmethod
     def _abbreviate_medical_title(value: str) -> str:
@@ -696,10 +730,9 @@ class GenerationService:
 
     @staticmethod
     def _format_recipient_run(run) -> None:
-        """Format only the nine dynamic headers inserted into Word."""
+        """Use TNR while preserving the size authored in each template."""
 
         run.font.name = "Times New Roman"
-        run.font.size = Pt(12)
         run_properties = run._element.get_or_add_rPr()
         run_fonts = run_properties.find(qn("w:rFonts"))
         if run_fonts is None:
@@ -778,12 +811,6 @@ class GenerationService:
                                         qn(f"w:{attribute}"),
                                         "Times New Roman",
                                     )
-                                for tag in ("w:sz", "w:szCs"):
-                                    size = run_properties.find(qn(tag))
-                                    if size is None:
-                                        size = OxmlElement(tag)
-                                        run_properties.append(size)
-                                    size.set(qn("w:val"), "24")
                             if should_highlight:
                                 if run_properties is None:
                                     run_properties = OxmlElement("w:rPr")

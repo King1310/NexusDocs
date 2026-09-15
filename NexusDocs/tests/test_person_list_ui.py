@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QHeaderView
 
 from domain.value_objects.fullname import FullName
+from dataclasses import replace
 from tests.factories.person_factory import PersonFactory
 from ui.person.person_list_window import PersonListWindow
 
@@ -36,6 +37,10 @@ def test_person_table_window_is_resizable_and_has_no_obsolete_buttons():
     assert not hasattr(window, "export_pdf_button")
     assert not hasattr(window, "export_documents_to_pdf")
     assert "Google AI" in window.internet_headers_button.text()
+    assert window.generate_extension_button.text() == (
+        "Сформировать продление до 10 суток"
+    )
+    assert not hasattr(window, "signed_scan_button")
 
 
 def test_id_and_last_name_columns_sort_in_both_directions():
@@ -95,3 +100,45 @@ def test_internal_header_status_has_readable_ui_label():
     assert PersonListWindow._verification_status_label("needs_review") == (
         "требует проверки"
     )
+
+
+def test_extension_for_legacy_person_points_to_edit(monkeypatch):
+    person = PersonFactory.create()
+    person = replace(
+        person,
+        military=replace(
+            person.military,
+            military_deployment="",
+            service_basis="",
+        ),
+        soch_case=replace(
+            person.soch_case,
+            registration_date=None,
+            circumstances="",
+        ),
+    )
+
+    class Repository:
+        @staticmethod
+        def get_all():
+            return [person]
+
+        @staticmethod
+        def get_by_id(person_id):
+            return person if person_id == person.id else None
+
+    warnings = []
+    monkeypatch.setattr(
+        "ui.person.person_list_window.QMessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+    window = PersonListWindow(Repository())
+    window.select_person(person.id)
+
+    assert window.generate_extension() is None
+    assert warnings
+    message = warnings[0][2]
+    assert "не все данные заполнены" in message
+    assert "Дислокация в/части" in message
+    assert "Дата регистрации" in message
+    assert "Редактировать" in message

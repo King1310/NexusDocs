@@ -17,6 +17,8 @@ class SochCase:
     case_number: str | None
     procedural_control: str
     article: str
+    registration_date: date | None = None
+    circumstances: str = ""
 
     def to_dict(self) -> dict:
         """
@@ -31,4 +33,10 @@ class SochCase:
             "case_number": self.case_number,
             "procedural_control": self.procedural_control,
             "article": self.article,
+            "registration_date": (
+                self.registration_date.isoformat()
+                if self.registration_date is not None
+                else None
+            ),
+            "circumstances": self.circumstances,
         }

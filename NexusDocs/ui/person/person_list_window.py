@@ -31,6 +31,7 @@ from services.google_organization_search_service import (
     GoogleOrganizationSearchService,
 )
 from services.generation_service import GenerationService
+from services.extension_generation_service import ExtensionGenerationService
 from services.territory_service import HeaderResolution, TerritoryService
 from services.word_bundle_service import WordBundleService
 from utils.declension import decline_full_name, rank_genitive
@@ -67,6 +68,7 @@ class PersonListWindow(QDialog):
             TerritoryRepository()
         )
         self.generation_service = GenerationService()
+        self.extension_generation_service = ExtensionGenerationService()
         self.word_bundle_service = WordBundleService()
 
         self.setWindowTitle(
@@ -231,6 +233,10 @@ class PersonListWindow(QDialog):
             "Сформировать общий Word"
         )
 
+        self.generate_extension_button = QPushButton(
+            "Сформировать продление до 10 суток"
+        )
+
         self.delete_button = QPushButton(
             "Удалить"
         )
@@ -253,6 +259,10 @@ class PersonListWindow(QDialog):
 
         self.generate_button.clicked.connect(
             self.generate_documents
+        )
+
+        self.generate_extension_button.clicked.connect(
+            self.generate_extension
         )
 
         self.delete_button.clicked.connect(
@@ -287,6 +297,10 @@ class PersonListWindow(QDialog):
 
         document_buttons.addWidget(
             self.generate_button
+        )
+
+        document_buttons.addWidget(
+            self.generate_extension_button
         )
 
         document_buttons.addStretch()
@@ -551,6 +565,10 @@ class PersonListWindow(QDialog):
 
         soch_text = (
             f"Дата СОЧ: {soch.soch_date}\n"
+            f"Дата регистрации: "
+            f"{soch.registration_date or 'Не указана'}\n"
+            f"Обстоятельства СОЧ: "
+            f"{soch.circumstances or 'Не указаны'}\n"
             f"Место: {soch.soch_place}\n"
             f"Продолжительность: {soch.duration}\n"
             f"Тип дела: {soch.case_type}\n"
@@ -585,6 +603,10 @@ class PersonListWindow(QDialog):
             f"<b>Военные сведения:</b><br>"
             f"Воинская часть: "
             f"{military.military_unit}<br>"
+            f"Дислокация в/части: "
+            f"{military.military_deployment or 'Не указана'}<br>"
+            f"Условия призыва: "
+            f"{military.service_basis or 'Не указаны'}<br>"
             f"Звание: {military.rank}<br>"
             f"Должность: {military.position}<br>"
             f"Военный билет: "
@@ -880,7 +902,7 @@ class PersonListWindow(QDialog):
             self._show_header_problems(resolution)
 
     def generate_documents(self) -> None:
-        """Создать полный комплект из пятнадцати запросов."""
+        """Создать комплект запросов и следом продление до десяти суток."""
 
         person = self._get_selected_person()
         if person is None:
@@ -909,6 +931,10 @@ class PersonListWindow(QDialog):
 
         progress = self._progress("Собираю общий Word-файл…")
         bundle_path = output_dir / self.word_bundle_service.bundle_filename(person)
+        extension_path = None
+        missing_extension_fields = self.extension_generation_service.missing_fields(
+            person
+        )
         try:
             with tempfile.TemporaryDirectory(
                 prefix="nexusdocs_",
@@ -925,21 +951,110 @@ class PersonListWindow(QDialog):
                     generated,
                     bundle_path,
                 )
+            if not missing_extension_fields:
+                extension_path = self._create_extension_file(
+                    person,
+                    overrides,
+                )
         except Exception as error:
             progress.close()
             QMessageBox.warning(self, "Генерация остановлена", str(error))
             return
         progress.close()
 
+        ready_message = (
+            "Создан общий редактируемый Word из 15 запросов:\n\n"
+            f"{bundle_path}"
+        )
+        if extension_path is not None:
+            ready_message += (
+                "\n\nСоздано продление до 10 суток:\n\n"
+                f"{extension_path}"
+            )
+        ready_message += (
+            "\n\nФайлы можно проверить, при необходимости "
+            "отредактировать и распечатать."
+        )
         QMessageBox.information(
             self,
             "Документы готовы",
-            "Создан общий редактируемый Word из 15 запросов:\n\n"
-            f"{bundle_path}\n\n"
-            "Файл можно проверить, при необходимости отредактировать "
-            "и распечатать целиком.",
+            ready_message,
         )
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(bundle_path)))
+        if extension_path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(extension_path)))
+        elif missing_extension_fields:
+            self._show_missing_extension_fields(missing_extension_fields)
+
+    def generate_extension(self) -> Path | None:
+        """Сформировать продление для выбранного человека."""
+
+        person = self._get_selected_person()
+        if person is None:
+            return None
+
+        missing_fields = self.extension_generation_service.missing_fields(person)
+        if missing_fields:
+            self._show_missing_extension_fields(missing_fields)
+            return None
+
+        overrides = self._request_declension_overrides(person)
+        if overrides is None:
+            return None
+
+        progress = self._progress("Формирую продление до 10 суток…")
+        try:
+            output_path = self._create_extension_file(person, overrides)
+        except Exception as error:
+            progress.close()
+            QMessageBox.warning(self, "Генерация остановлена", str(error))
+            return None
+        progress.close()
+
+        QMessageBox.information(
+            self,
+            "Продление готово",
+            "Создано продление до 10 суток:\n\n"
+            f"{output_path}\n\n"
+            "Файл можно проверить, отредактировать и распечатать.",
+        )
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path)))
+        return output_path
+
+    def _create_extension_file(
+        self,
+        person,
+        overrides: dict[str, str] | None = None,
+    ) -> Path:
+        project_dir = Path(__file__).resolve().parents[2]
+        template_path = (
+            project_dir
+            / "templates"
+            / "extensions"
+            / "extension_to_10_days.docx"
+        )
+        output_dir = project_dir / "output" / str(person.id)
+        return self.extension_generation_service.generate(
+            person=person,
+            template_path=template_path,
+            output_dir=output_dir,
+            overrides=overrides,
+        )
+
+    def _show_missing_extension_fields(
+        self,
+        missing_fields: tuple[str, ...],
+    ) -> None:
+        fields = "\n".join(f"— {field}" for field in missing_fields)
+        QMessageBox.warning(
+            self,
+            "Продление не создано",
+            "Нельзя сформировать продление до 10 суток: "
+            "не все данные заполнены.\n\n"
+            f"Необходимо заполнить:\n{fields}\n\n"
+            "Выберите человека, нажмите «Редактировать» и заполните "
+            "недостающие поля.",
+        )
 
     def _ensure_headers_ready(self, person):
         """Prepare all nine headers through Alice before Word generation."""
@@ -1136,7 +1251,7 @@ class PersonListWindow(QDialog):
         layout = QVBoxLayout(dialog)
         layout.addWidget(
             QLabel(
-                "Проверьте формы, которые будут использованы во всех 15 запросах."
+                "Проверьте формы, которые будут использованы в документах."
             )
         )
 

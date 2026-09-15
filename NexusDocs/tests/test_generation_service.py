@@ -17,6 +17,16 @@ from services.word_bundle_service import WordBundleService
 from tests.factories.person_factory import PersonFactory
 
 
+def test_military_unit_prefix_is_removed_without_leaving_word_fragments():
+    for value in (
+        "в/ч 95375",
+        "в/часть 95375",
+        "в/части 95375",
+        "войсковая часть № 95375",
+    ):
+        assert GenerationService._military_unit_value(value) == "95375"
+
+
 def test_generation_replaces_template_placeholders(tmp_path):
     template_path = tmp_path / "request_template.docx"
     template = Document()
@@ -166,6 +176,8 @@ def test_real_templates_use_bold_response_deadline_placeholder():
     deadline_nodes = []
 
     for template_path in sorted(template_dir.glob("*.docx")):
+        if template_path.name.startswith("~$"):
+            continue
         document = Document(template_path)
         combined = "".join(
             node.text or ""
@@ -196,6 +208,39 @@ def test_mp_case_phrase_remains_materials_check():
     assert replacements["{{CASE_LOCATION_PHRASE}}"] == (
         "находятся материалы проверки"
     )
+
+
+def test_mvd_requests_change_proceeding_stage_for_mp_and_ud(tmp_path):
+    template_dir = (
+        Path(__file__).resolve().parents[1] / "templates" / "requests"
+    )
+    mvd_requests = REQUEST_CATALOG[9:11]
+
+    for case_type, expected, absent in (
+        ("МП", "доследственной проверки", "предварительного следствия"),
+        ("УД", "предварительного следствия", "доследственной проверки"),
+    ):
+        person = PersonFactory.create()
+        person.soch_case = replace(
+            person.soch_case,
+            case_type=case_type,
+            case_number=("1.26.0200.2402.000152" if case_type == "УД" else None),
+        )
+        for request in mvd_requests:
+            output = GenerationService().generate_request(
+                person=person,
+                request=request,
+                organization=None,
+                template_dir=template_dir,
+                output_dir=tmp_path / case_type,
+            )
+            generated = Document(output)
+            text = "".join(
+                node.text or ""
+                for node in generated.element.body.iter(qn("w:t"))
+            )
+            assert expected in text
+            assert absent not in text
 
 
 def test_ud_phrase_is_applied_to_every_real_request_template(tmp_path):
@@ -396,11 +441,12 @@ def test_generation_abbreviates_long_medical_titles():
     assert "Государственное бюджетное учреждение" not in header
 
 
-def test_dynamic_recipient_header_uses_times_new_roman_12_pt():
+def test_dynamic_recipient_header_uses_tnr_and_keeps_template_size():
     document = Document()
     paragraph = document.add_paragraph()
     run = paragraph.add_run("{{RECIPIENT_HEADER}}")
     run.font.name = "Arial"
+    run.font.size = Pt(13)
 
     GenerationService._replace_in_paragraph(
         paragraph,
@@ -408,7 +454,7 @@ def test_dynamic_recipient_header_uses_times_new_roman_12_pt():
     )
 
     assert paragraph.runs[0].font.name == "Times New Roman"
-    assert paragraph.runs[0].font.size == Pt(12)
+    assert paragraph.runs[0].font.size == Pt(13)
 
 
 def test_generation_uses_one_blank_line_before_contiguous_contacts():
@@ -440,20 +486,61 @@ def test_generation_uses_one_blank_line_before_contiguous_contacts():
     )
 
 
-def test_generation_omits_email_for_protocol_exceptions():
+def test_generation_keeps_found_email_for_protocol_exceptions():
     organization = Organization(
         id=None,
         organization_type=OrganizationType.MILITARY_COMMANDANT,
         recipient="Военному коменданту\nВоенной комендатуры\nПодольского гарнизона",
         postal_address="142100, Московская область, г. Подольск, ул. Парковая, д. 56",
         phones=("+7 (496) 755-63-30",),
-        email="unused@example.ru",
+        email="commandant@example.ru",
     )
 
     header = GenerationService._simple_recipient_header(organization)
 
-    assert "эл. почта" not in header
-    assert "unused@example.ru" not in header
+    assert "эл. почта: commandant@example.ru" in header
+
+
+def test_generation_removes_repeated_military_organization_names():
+    commissariat = Organization(
+        id=None,
+        organization_type=OrganizationType.MILITARY_COMMISSARIAT,
+        recipient=(
+            "Военному комиссару\n"
+            "Военного комиссариата\n"
+            "Объединённый военный комиссариат\n"
+            "Черёмушкинского района Юго-Западного административного округа "
+            "города Москвы"
+        ),
+        postal_address="119333, г. Москва, ул. Вавилова, д. 44, к. 1",
+    )
+    commandant = Organization(
+        id=None,
+        organization_type=OrganizationType.MILITARY_COMMANDANT,
+        recipient=(
+            "Военному коменданту\n"
+            "Военной комендатуры\n"
+            "Военная комендатура Челябинского гарнизона"
+        ),
+        postal_address="454091, г. Челябинск, ул. Кирова, д. 92",
+    )
+
+    commissariat_header = GenerationService._simple_recipient_header(commissariat)
+    commandant_header = GenerationService._simple_recipient_header(commandant)
+
+    assert commissariat_header.startswith(
+        "Военному комиссару\n"
+        "Военного комиссариата\n"
+        "Черёмушкинского района Юго-Западного административного округа "
+        "города Москвы\n\n"
+    )
+    assert "Объединённый военный комиссариат" not in commissariat_header
+    assert commandant_header.startswith(
+        "Военному коменданту\n"
+        "Военной комендатуры\n"
+        "Челябинского гарнизона\n\n"
+    )
+    assert commandant_header.count("комендатур") == 1
 
 
 def test_generation_formats_contract_service_point_as_four_fixed_lines():
@@ -478,7 +565,7 @@ def test_generation_formats_contract_service_point_as_four_fixed_lines():
         "Начальнику\nПункта отбора\nна военную службу по контракту\n"
         "Московской области\n\n"
     )
-    assert "эл. почта" not in header
+    assert "эл. почта: unused@example.ru" in header
 
 
 def test_generation_removes_administration_head_and_word_administration():

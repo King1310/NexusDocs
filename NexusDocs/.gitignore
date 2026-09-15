@@ -19,3 +19,6 @@ output/
 
 # Cache
 cache/
+
+# Generated QA and processing files
+tmp/

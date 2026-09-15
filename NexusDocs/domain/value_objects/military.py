@@ -13,6 +13,8 @@ class Military:
     rank: str
     position: str
     military_id: str
+    military_deployment: str = ""
+    service_basis: str = ""
 
     def to_dict(self) -> dict:
         """
@@ -24,4 +26,6 @@ class Military:
             "rank": self.rank,
             "position": self.position,
             "military_id": self.military_id,
+            "military_deployment": self.military_deployment,
+            "service_basis": self.service_basis,
         }

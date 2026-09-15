@@ -3,8 +3,10 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QInputDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -23,6 +25,7 @@ from ui.person_military_window import PersonMilitaryWindow
 from ui.person_soch_window import PersonSochWindow
 from ui.person_document_window import PersonDocumentWindow
 from ui.person.person_list_window import PersonListWindow
+from ui.request_dispatch_window import RequestDispatchWindow
 from ui.styles import MAIN_WINDOW_STYLE
 
 
@@ -55,6 +58,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
         self.person_list_window = None
+        self.request_dispatch_window = None
 
     def _setup_ui(self) -> None:
         """
@@ -124,9 +128,19 @@ class MainWindow(QMainWindow):
             "База людей"
         )
 
+        self.extension_button = QPushButton(
+            "Сделать продление до 10 суток"
+        )
+
+        self.dispatch_button = QPushButton(
+            "Отправка запросов"
+        )
+
         buttons = (
             self.new_request_button,
+            self.extension_button,
             self.people_button,
+            self.dispatch_button,
         )
 
         for button in buttons:
@@ -163,6 +177,63 @@ class MainWindow(QMainWindow):
         self.people_button.clicked.connect(
             self.open_people_database
         )
+
+        self.extension_button.clicked.connect(
+            self.open_extension_person_picker
+        )
+
+        self.dispatch_button.clicked.connect(
+            self.open_request_dispatch
+        )
+
+    def open_request_dispatch(self) -> None:
+        """Открыть независимое окно разбиения PDF и подготовки писем."""
+
+        if (
+            self.request_dispatch_window is None
+            or not self.request_dispatch_window.isVisible()
+        ):
+            self.request_dispatch_window = RequestDispatchWindow(
+                repository=self.person_repository,
+                parent=None,
+            )
+            self.request_dispatch_window.show()
+        else:
+            self.request_dispatch_window.activateWindow()
+            self.request_dispatch_window.raise_()
+
+    def open_extension_person_picker(self) -> None:
+        """Выбрать зарегистрированного человека и создать продление."""
+
+        people = self.person_repository.get_all()
+        if not people:
+            QMessageBox.warning(
+                self,
+                "Продление до 10 суток",
+                "В базе пока нет людей.",
+            )
+            return
+
+        labels = [
+            f"{person.id} — {person.full_name.full}"
+            for person in people
+        ]
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "Продление до 10 суток",
+            "Выберите человека:",
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+
+        selected_index = labels.index(selected_label)
+        person = people[selected_index]
+        self.open_people_database()
+        self.person_list_window.select_person(person.id)
+        self.person_list_window.generate_extension()
 
     def open_people_database(self) -> None:
         """

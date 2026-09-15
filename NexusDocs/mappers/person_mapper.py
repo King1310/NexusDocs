@@ -137,6 +137,8 @@ class PersonMapper:
                 rank=data["rank"],
                 position=data["position"],
                 military_id=data["military_id"],
+                military_deployment=data.get("military_deployment") or "",
+                service_basis=data.get("service_basis") or "",
             ),
 
             soch_case=SochCase(
@@ -149,6 +151,12 @@ class PersonMapper:
                 case_number=data["case_number"],
                 procedural_control=data["procedural_control"],
                 article=data["article"],
+                registration_date=(
+                    date.fromisoformat(data["registration_date"])
+                    if data.get("registration_date")
+                    else None
+                ),
+                circumstances=data.get("circumstances") or "",
             ),
 
             document_info=DocumentInfo(

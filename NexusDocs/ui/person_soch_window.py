@@ -55,6 +55,18 @@ class PersonSochWindow(QDialog):
             QDate.currentDate()
         )
 
+        self.registration_date_input = QDateEdit()
+        self.registration_date_input.setCalendarPopup(True)
+        self.registration_date_input.setDate(QDate.currentDate())
+
+        self.circumstances_input = QComboBox()
+        self.circumstances_input.addItems(
+            [
+                "Неявка в срок",
+                "Самовольное оставление части",
+            ]
+        )
+
         self.soch_place_input = QLineEdit()
 
         self.duration_input = QComboBox()
@@ -97,6 +109,16 @@ class PersonSochWindow(QDialog):
         form_layout.addRow(
             "Дата СОЧ:",
             self.soch_date_input,
+        )
+
+        form_layout.addRow(
+            "Дата регистрации:",
+            self.registration_date_input,
+        )
+
+        form_layout.addRow(
+            "Обстоятельства СОЧ:",
+            self.circumstances_input,
         )
 
         form_layout.addRow(
@@ -162,6 +184,18 @@ class PersonSochWindow(QDialog):
                 soch_case.soch_date.day,
             )
         )
+        if soch_case.registration_date is not None:
+            self.registration_date_input.setDate(
+                QDate(
+                    soch_case.registration_date.year,
+                    soch_case.registration_date.month,
+                    soch_case.registration_date.day,
+                )
+            )
+        if soch_case.circumstances:
+            self.circumstances_input.setCurrentText(
+                soch_case.circumstances
+            )
         self.soch_place_input.setText(soch_case.soch_place)
         self.duration_input.setCurrentText(soch_case.duration)
         self.case_type_input.setCurrentText(soch_case.case_type)
@@ -246,6 +280,18 @@ class PersonSochWindow(QDialog):
             .toPython()
         )
 
+        registration_date = (
+            self.registration_date_input
+            .date()
+            .toPython()
+        )
+
+        circumstances = (
+            self.circumstances_input
+            .currentText()
+            .strip()
+        )
+
         soch_place = (
             self.soch_place_input
             .text()
@@ -309,6 +355,8 @@ class PersonSochWindow(QDialog):
             case_number=case_number,
             procedural_control=procedural_control,
             article=article,
+            registration_date=registration_date,
+            circumstances=circumstances,
         )
 
         self.accept()

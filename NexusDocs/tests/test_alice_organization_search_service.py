@@ -226,6 +226,21 @@ def test_google_military_recipient_drops_repeated_organization_prefix():
         "гарнизона 1 разряда г. Челябинск"
     )
 
+    combined_commissariat = (
+        "Военному комиссару\n"
+        "Военного комиссариата\n"
+        "Объединённый военный комиссариат\n"
+        "Черёмушкинского района города Москвы"
+    )
+    assert AliceOrganizationSearchService._normalize_recipient_layout(
+        combined_commissariat,
+        OrganizationType.MILITARY_COMMISSARIAT,
+    ) == (
+        "Военному комиссару\n"
+        "Военного комиссариата\n"
+        "Черёмушкинского района города Москвы"
+    )
+
 
 def test_parser_builds_all_nine_organizations_in_protocol_order():
     outcome = AliceOrganizationSearchService.parse_response(_alice_answer())
