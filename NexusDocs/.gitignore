@@ -22,3 +22,6 @@ cache/
 
 # Generated QA and processing files
 tmp/
+
+# Scanned personal signatures stay on this computer.
+assets/signatures/*.png

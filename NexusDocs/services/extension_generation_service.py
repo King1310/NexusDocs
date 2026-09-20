@@ -45,7 +45,7 @@ class ExtensionGenerationService:
         required = (
             ("Дислокация в/части", person.military.military_deployment),
             ("Условия призыва", person.military.service_basis),
-            ("Дата регистрации", person.soch_case.registration_date),
+            ("Дата исходящего документа", person.document_info.outgoing_date),
             ("Обстоятельства СОЧ", person.soch_case.circumstances),
         )
         return tuple(label for label, value in required if not value)
@@ -71,6 +71,7 @@ class ExtensionGenerationService:
             )
 
         document = Document(template_path)
+        self._replacement_service._prepare_investigator_lines(document)
         replacements = self._build_replacements(person, overrides)
         self._replacement_service._replace_in_container(document, replacements)
 
@@ -81,10 +82,10 @@ class ExtensionGenerationService:
 
     @classmethod
     def filename(cls, person: Person) -> str:
-        registration_date = person.soch_case.registration_date
+        outgoing_date = person.document_info.outgoing_date
         date_part = (
-            registration_date.strftime("%d.%m.%Y")
-            if registration_date is not None
+            outgoing_date.strftime("%d.%m.%Y")
+            if outgoing_date is not None
             else "без_даты"
         )
         base = (
@@ -120,16 +121,17 @@ class ExtensionGenerationService:
             rank_genitive(person.military.rank),
         )
 
-        registration_date = person.soch_case.registration_date
-        if registration_date is None:
-            raise ValueError("Не заполнена дата регистрации.")
-        three_day_date = registration_date + timedelta(days=2)
-        ten_day_date = registration_date + timedelta(days=9)
+        outgoing_date = person.document_info.outgoing_date
+        if outgoing_date is None:
+            raise ValueError("Не заполнена дата исходящего документа.")
+        three_day_date = outgoing_date + timedelta(days=2)
+        ten_day_date = outgoing_date + timedelta(days=9)
         military_unit = GenerationService._military_unit_value(
             person.military.military_unit
         )
 
         return {
+            **person.investigator.replacements(),
             "{{FULL_NAME_INITIALS}}": person.full_name.initials,
             "{{FULL_NAME_INITIALS_GENITIVE}}": (
                 f"{last_genitive} "
@@ -147,7 +149,8 @@ class ExtensionGenerationService:
             "{{SERVICE_BASIS}}": person.military.service_basis,
             "{{ARTICLE}}": person.soch_case.article,
             "{{SOCH_DATE}}": cls._numeric_date(person.soch_case.soch_date),
-            "{{REGISTRATION_DATE}}": cls._numeric_date(registration_date),
+            # Retain the existing template token with the unified document date.
+            "{{REGISTRATION_DATE}}": cls._numeric_date(outgoing_date),
             "{{THREE_DAY_DATE}}": cls._numeric_date(three_day_date),
             "{{TEN_DAY_DATE}}": cls._numeric_date(ten_day_date),
             "{{THREE_DAY_LONG_COMPACT}}": cls._long_date(

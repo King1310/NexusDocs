@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import re
 import tempfile
+import unicodedata
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QApplication,
     QDialog,
     QDialogButtonBox,
@@ -34,6 +37,7 @@ from services.generation_service import GenerationService
 from services.extension_generation_service import ExtensionGenerationService
 from services.territory_service import HeaderResolution, TerritoryService
 from services.word_bundle_service import WordBundleService
+from services.document_signature_service import DocumentSignatureService
 from utils.declension import decline_full_name, rank_genitive
 
 from ui.form_data import PersonFormData
@@ -70,6 +74,7 @@ class PersonListWindow(QDialog):
         self.generation_service = GenerationService()
         self.extension_generation_service = ExtensionGenerationService()
         self.word_bundle_service = WordBundleService()
+        self.document_signature_service = DocumentSignatureService()
 
         self.setWindowTitle(
             "База людей"
@@ -131,7 +136,7 @@ class PersonListWindow(QDialog):
         self.search_input = QLineEdit()
 
         self.search_input.setPlaceholderText(
-            "Введите фамилию..."
+            "Введите ID или ФИО..."
         )
 
         self.search_input.textChanged.connect(
@@ -200,6 +205,24 @@ class PersonListWindow(QDialog):
             0,
             Qt.SortOrder.AscendingOrder,
         )
+
+        self.reset_filters_button = self.people_table.findChild(
+            QAbstractButton,
+            "qt_tableview_cornerbutton",
+        )
+        if self.reset_filters_button is not None:
+            self.reset_filters_button.setToolTip(
+                "Сбросить поиск и сортировку"
+            )
+            self.reset_filters_button.setAccessibleName(
+                "Сбросить поиск и сортировку"
+            )
+            self.reset_filters_button.setCursor(
+                Qt.CursorShape.PointingHandCursor
+            )
+            self.reset_filters_button.clicked.connect(
+                self.reset_search_and_sorting
+            )
 
         self.people_table.doubleClicked.connect(
             self.show_person
@@ -328,21 +351,79 @@ class PersonListWindow(QDialog):
         text: str,
     ) -> None:
         """
-        Поиск людей по фамилии.
+        Поиск людей по ID и любой части ФИО.
         """
 
-        text = text.strip()
+        tokens = self._normalized_search_tokens(text)
 
-        if not text:
+        if not tokens:
             self.load_people()
             return
 
-        people = self.repository.search_by_last_name(
-            text
-        )
+        people = [
+            person
+            for person in self.repository.get_all()
+            if self._person_matches_search(person, tokens)
+        ]
 
         self._fill_table(
             people
+        )
+
+    def reset_search_and_sorting(self) -> None:
+        """Очистить поиск и вернуть несортированный список из базы."""
+
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+
+        sorting_enabled = self.people_table.isSortingEnabled()
+        self.people_table.setSortingEnabled(False)
+        table_header = self.people_table.horizontalHeader()
+        table_header.setSortIndicator(
+            -1,
+            Qt.SortOrder.AscendingOrder,
+        )
+        self._fill_table(self.repository.get_all())
+        self.people_table.setSortingEnabled(sorting_enabled)
+        table_header.setSortIndicator(
+            -1,
+            Qt.SortOrder.AscendingOrder,
+        )
+        self.people_table.clearSelection()
+        self.people_table.scrollToTop()
+
+    @staticmethod
+    def _normalized_search_tokens(text: object) -> tuple[str, ...]:
+        """Нормализовать регистр, пробелы, знаки и различие между е/ё."""
+
+        normalized = unicodedata.normalize("NFKC", str(text))
+        normalized = normalized.casefold().replace("ё", "е")
+        normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
+        return tuple(normalized.split())
+
+    @classmethod
+    def _person_matches_search(cls, person, tokens: tuple[str, ...]) -> bool:
+        if len(tokens) == 1 and tokens[0].isdecimal():
+            return str(person.id) == tokens[0]
+
+        full_name = person.full_name
+        searchable = " ".join(
+            (
+                str(person.id),
+                full_name.last_name,
+                full_name.first_name,
+                full_name.middle_name,
+                full_name.full,
+                full_name.first_name[:1],
+                full_name.middle_name[:1],
+            )
+        )
+        normalized = " ".join(cls._normalized_search_tokens(searchable))
+        compact = normalized.replace(" ", "")
+        return all(
+            token in normalized or token in compact
+            for token in tokens
         )
 
     def _fill_table(
@@ -565,8 +646,6 @@ class PersonListWindow(QDialog):
 
         soch_text = (
             f"Дата СОЧ: {soch.soch_date}\n"
-            f"Дата регистрации: "
-            f"{soch.registration_date or 'Не указана'}\n"
             f"Обстоятельства СОЧ: "
             f"{soch.circumstances or 'Не указаны'}\n"
             f"Место: {soch.soch_place}\n"
@@ -583,6 +662,7 @@ class PersonListWindow(QDialog):
 
         text = (
             f"<b>ID:</b> {person.id}<br><br>"
+            f"<b>Исполнитель:</b><br>{person.investigator.display_name}<br><br>"
 
             f"<b>ФИО:</b><br>"
             f"{full_name}<br><br>"
@@ -609,7 +689,7 @@ class PersonListWindow(QDialog):
             f"{military.service_basis or 'Не указаны'}<br>"
             f"Звание: {military.rank}<br>"
             f"Должность: {military.position}<br>"
-            f"Военный билет: "
+            f"Номер жетона: "
             f"{military.military_id}<br><br>"
 
             f"<b>Сведения о СОЧ:</b><br>"
@@ -929,8 +1009,16 @@ class PersonListWindow(QDialog):
         if overrides is None:
             return
 
-        progress = self._progress("Собираю общий Word-файл…")
-        bundle_path = output_dir / self.word_bundle_service.bundle_filename(person)
+        progress = self._progress("Собираю Word-комплекты с подписью и без…")
+        bundle_path = output_dir / self.word_bundle_service.bundle_filename(
+            person, signed=False
+        )
+        signed_bundle_path = output_dir / self.word_bundle_service.bundle_filename(
+            person, signed=True
+        )
+        # A new generation must not overwrite a previously reviewed copy.
+        bundle_path = self._unused_document_path(bundle_path)
+        signed_bundle_path = self._unused_document_path(signed_bundle_path)
         extension_path = None
         missing_extension_fields = self.extension_generation_service.missing_fields(
             person
@@ -947,9 +1035,13 @@ class PersonListWindow(QDialog):
                     output_dir=Path(temporary_dir),
                     overrides=overrides,
                 )
-                self.word_bundle_service.create_editable_bundle(
-                    generated,
-                    bundle_path,
+                assembled_path = Path(temporary_dir) / "assembled.docx"
+                self.word_bundle_service.create_editable_bundle(generated, assembled_path)
+                self.document_signature_service.create_unsigned_copy(
+                    assembled_path, bundle_path
+                )
+                self.document_signature_service.create_signed_copy(
+                    assembled_path, signed_bundle_path, person.investigator
                 )
             if not missing_extension_fields:
                 extension_path = self._create_extension_file(
@@ -963,8 +1055,9 @@ class PersonListWindow(QDialog):
         progress.close()
 
         ready_message = (
-            "Создан общий редактируемый Word из 15 запросов:\n\n"
-            f"{bundle_path}"
+            "Созданы два редактируемых комплекта из 15 запросов.\n\n"
+            f"Без подписи — для печати и дела:\n{bundle_path}\n\n"
+            f"С подписью — для подготовки писем:\n{signed_bundle_path}"
         )
         if extension_path is not None:
             ready_message += (
@@ -972,19 +1065,29 @@ class PersonListWindow(QDialog):
                 f"{extension_path}"
             )
         ready_message += (
-            "\n\nФайлы можно проверить, при необходимости "
-            "отредактировать и распечатать."
+            "\n\nПроверьте и при необходимости отредактируйте оба Word-файла. "
+            "Сохраните правки. Затем выберите проверенный комплект с подписью "
+            "в окне «Отправка запросов», чтобы преобразовать его в PDF."
         )
         QMessageBox.information(
             self,
             "Документы готовы",
             ready_message,
         )
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(bundle_path)))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(signed_bundle_path)))
         if extension_path is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(extension_path)))
         elif missing_extension_fields:
             self._show_missing_extension_fields(missing_extension_fields)
+
+    @staticmethod
+    def _unused_document_path(path: Path) -> Path:
+        candidate = path
+        version = 2
+        while candidate.exists():
+            candidate = path.with_name(f"{path.stem}_{version}{path.suffix}")
+            version += 1
+        return candidate
 
     def generate_extension(self) -> Path | None:
         """Сформировать продление для выбранного человека."""

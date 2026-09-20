@@ -87,6 +87,7 @@ def create_tables() -> None:
         for row in cursor.execute("PRAGMA table_info(persons)")
     }
     migrations = {
+        "investigator_key": "TEXT NOT NULL DEFAULT 'tsomartov'",
         "military_deployment": "TEXT",
         "service_basis": "TEXT",
         "registration_date": "TEXT",

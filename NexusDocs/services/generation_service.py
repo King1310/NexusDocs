@@ -6,15 +6,18 @@ import re
 import os
 import tempfile
 import zipfile
+from collections import Counter
 from collections.abc import Iterable, Mapping
 
 from docx import Document
 from docx.document import Document as DocumentObject
-from docx.enum.text import WD_COLOR_INDEX
+from docx.enum.text import WD_COLOR_INDEX, WD_TAB_ALIGNMENT, WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.table import _Cell, Table
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
+from docx.shared import Pt
 from lxml import etree
 
 from domain.entities.organization import Organization
@@ -39,6 +42,7 @@ class GenerationService:
             raise FileNotFoundError(f"Шаблон не найден: {template_path}")
 
         document = Document(template_path)
+        self._prepare_template(document)
         replacements = self._build_replacements(person, organization, overrides)
         highlighted = self._highlighted_placeholders(organization)
         self._replace_in_container(document, replacements, highlighted)
@@ -101,11 +105,16 @@ class GenerationService:
             raise FileNotFoundError(f"Шаблон не найден: {template_path}")
 
         document = Document(template_path)
+        self._prepare_template(document)
         replacements = self._build_replacements(person, organization, overrides)
         if request.number in {10, 11}:
             replacements["предварительного следствия"] = (
                 self._mvd_proceeding_stage(person)
             )
+        if request.number == 11:
+            self._compact_form_tail(document)
+        if request.number in {3, 15}:
+            self._compact_header_gap(document)
         highlighted = self._highlighted_placeholders(organization)
         self._replace_in_container(document, replacements, highlighted)
 
@@ -114,6 +123,211 @@ class GenerationService:
         document.save(output_path)
         self._replace_in_package(output_path, replacements, highlighted)
         return output_path
+
+    @classmethod
+    def _prepare_template(cls, document: DocumentObject) -> None:
+        """Keep registration wording and match recipient text to the letter body."""
+
+        cls._remove_actual_residence(document)
+        cls._prepare_investigator_lines(document)
+        recipients = cls._recipient_paragraphs(document)
+        body_size = cls._body_font_size(document, recipients)
+        if body_size is None:
+            return
+        for paragraph in recipients:
+            for node in cls._paragraph_text_nodes(paragraph):
+                run = Run(node.getparent(), Paragraph(paragraph, document))
+                cls._format_recipient_run(run)
+                run.font.size = Pt(body_size)
+                properties = run._element.get_or_add_rPr()
+                complex_size = properties.find(qn("w:szCs"))
+                if complex_size is None:
+                    complex_size = OxmlElement("w:szCs")
+                    properties.append(complex_size)
+                complex_size.set(qn("w:val"), str(round(body_size * 2)))
+
+    @classmethod
+    def _prepare_investigator_lines(cls, document: DocumentObject) -> None:
+        # Keep the printed position and name together; a floating signature
+        # must not be clipped above the top of a new page.
+        paragraphs = document.paragraphs
+        for index, paragraph in enumerate(paragraphs):
+            if not ("{{INVESTIGATOR_INITIALS_SURNAME}}" in paragraph.text
+                    or ("юстиции" in paragraph.text.casefold() and "Цомартов" in paragraph.text)):
+                continue
+            if paragraph._p.find(qn("w:pPr") + "/" + qn("w:framePr")) is not None:
+                continue
+            if "{{INVESTIGATOR_RANK}}" in paragraph.text:
+                padding = re.search(
+                    r"(?<=\}\})[ \t]+(?=\{\{INVESTIGATOR_INITIALS_SURNAME\}\})",
+                    paragraph.text,
+                )
+                if padding:
+                    cls._replace_in_paragraph(paragraph, {padding.group(): "\t"})
+                    for run in reversed(paragraph.runs):
+                        original = run.text
+                        run.text = original.rstrip(" \t\n")
+                        if run.text:
+                            break
+                    section = document.sections[0]
+                    usable_width = section.page_width - section.left_margin - section.right_margin
+                    paragraph.paragraph_format.tab_stops.clear_all()
+                    paragraph.paragraph_format.tab_stops.add_tab_stop(usable_width, WD_TAB_ALIGNMENT.RIGHT)
+                    paragraph.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.keep_together = True
+            for previous in reversed(paragraphs[max(0, index - 3):index]):
+                if (not previous.text.strip() or "следствен" in previous.text.casefold()
+                        or "СК России" in previous.text or "{{INVESTIGATOR_POSITION" in previous.text):
+                    previous.paragraph_format.keep_with_next = True
+                else:
+                    break
+
+    @staticmethod
+    def _compact_header_gap(document: DocumentObject) -> None:
+        """Keep the header's reserved space from being counted twice."""
+        paragraphs = document.paragraphs
+        if not paragraphs or "{{RECIPIENT_HEADER}}" not in paragraphs[0].text:
+            return
+        empty = []
+        for paragraph in paragraphs[1:]:
+            if paragraph.text.strip():
+                break
+            if (list(paragraph._p.iter(qn("w:drawing")))
+                    or list(paragraph._p.iter(qn("w:pict")))
+                    or paragraph._p.find(".//" + qn("w:sectPr")) is not None):
+                continue
+            empty.append(paragraph)
+        for paragraph in empty[:-4]:
+            paragraph._p.getparent().remove(paragraph._p)
+
+    @staticmethod
+    def _compact_form_tail(document: DocumentObject) -> None:
+        """Discard empty floating frames left after the landscape МВД form."""
+        # The supplied МВД samples use 12 pt in the form. Some retained runs
+        # inherit the 14 pt document default; longer executor titles expose it.
+        for table in document.tables:
+            for element in table._tbl.iter(qn("w:p")):
+                paragraph = Paragraph(element, document)
+                for run in paragraph.runs:
+                    if run.font.size is None or run.font.size > Pt(12):
+                        run.font.size = Pt(12)
+        for element in reversed(list(document.element.body)):
+            if element.tag == qn("w:sectPr"):
+                continue
+            if element.tag != qn("w:p"):
+                break
+            if ("".join(element.itertext()).strip()
+                    or list(element.iter(qn("w:drawing")))
+                    or list(element.iter(qn("w:pict")))
+                    or element.find(".//" + qn("w:sectPr")) is not None):
+                break
+            element.getparent().remove(element)
+        tail = document.add_paragraph()
+        tail.paragraph_format.line_spacing = Pt(1)
+        tail.paragraph_format.space_before = Pt(0)
+        tail.paragraph_format.space_after = Pt(0)
+        tail.add_run().font.size = Pt(1)
+    @staticmethod
+    def _paragraph_text_nodes(paragraph):
+        # An outer paragraph can also contain a drawing with its own paragraphs.
+        return [
+            node for node in paragraph.iter(qn("w:t"))
+            if next(node.iterancestors(qn("w:p")), None) is paragraph
+        ]
+
+    @staticmethod
+    def _paragraph_visible_text(paragraph) -> str:
+        parts = []
+        for node in paragraph.iter():
+            if next(node.iterancestors(qn("w:p")), None) is not paragraph:
+                continue
+            if node.tag == qn("w:t"):
+                parts.append(node.text or "")
+            elif node.tag in {qn("w:br"), qn("w:cr")}:
+                parts.append("\n")
+            elif node.tag == qn("w:tab"):
+                parts.append("\t")
+        return "".join(parts)
+
+    @classmethod
+    def _remove_actual_residence(cls, document: DocumentObject) -> None:
+        pattern = re.compile(
+            r"\s+и\s+фактически\s+прожива[а-яё]+", re.IGNORECASE
+        )
+        for paragraph in document.element.body.iter(qn("w:p")):
+            nodes = cls._paragraph_text_nodes(paragraph)
+            text = "".join(node.text or "" for node in nodes)
+            # Remove only the matching characters, keeping all run formatting.
+            for match in reversed(list(pattern.finditer(text))):
+                offset = 0
+                for node in nodes:
+                    value = node.text or ""
+                    end = offset + len(value)
+                    if offset < match.end() and end > match.start():
+                        left = max(0, match.start() - offset)
+                        right = min(len(value), match.end() - offset)
+                        node.text = value[:left] + value[right:]
+                    offset = end
+
+    @classmethod
+    def _recipient_paragraphs(cls, document: DocumentObject) -> list:
+        recipient_start = re.compile(
+            r"^(?:Командиру|Заведующей|Заведующему|Военному\s+комиссару|"
+            r"Военному\s+коменданту|Главному\s+врачу|Директору|Руководителю|"
+            r"Начальнику|Главе|Председателю)\b"
+        )
+        body_start = re.compile(
+            r"^(?:В\s+(?:производстве|военном|связи|целях)|Уважаем|"
+            r"ЗАПРОС\b|Запрос\b|Руководствуясь|Социально-демографические)"
+        )
+        result = []
+        in_recipient = False
+        for paragraph in document.element.body.iter(qn("w:p")):
+            text = cls._paragraph_visible_text(paragraph).strip()
+            is_dynamic = "{{RECIPIENT_HEADER}}" in text
+            if list(paragraph.iterancestors(qn("w:txbxContent"))) and not is_dynamic:
+                continue
+            if is_dynamic:
+                result.append(paragraph)
+                in_recipient = False
+            elif recipient_start.match(text):
+                result.append(paragraph)
+                in_recipient = True
+            elif in_recipient and body_start.match(text):
+                in_recipient = False
+            elif in_recipient and text:
+                result.append(paragraph)
+        return result
+
+    @classmethod
+    def _body_font_size(cls, document: DocumentObject, recipients: list) -> float | None:
+        recipient_ids = {id(paragraph) for paragraph in recipients}
+        paragraphs = [
+            paragraph for paragraph in document.paragraphs
+            if id(paragraph._p) not in recipient_ids
+            and paragraph.text.strip()
+        ]
+        # Main narrative, not the smaller sender letterhead or annex form labels.
+        narrative = [paragraph for paragraph in paragraphs if len(paragraph.text) >= 120]
+        sizes: Counter[float] = Counter()
+        for paragraph in narrative or paragraphs:
+            for run in paragraph.runs:
+                weight = len(run.text.strip())
+                if not weight:
+                    continue
+                size = run.font.size
+                for style in (run.style, paragraph.style, document.styles["Normal"]):
+                    seen = set()
+                    while size is None and style is not None and style.style_id not in seen:
+                        seen.add(style.style_id)
+                        size = style.font.size
+                        style = style.base_style
+                if size is not None:
+                    sizes[size.pt] += weight
+        if sizes:
+            return sizes.most_common(1)[0][0]
+        normal_size = document.styles["Normal"].font.size
+        return normal_size.pt if normal_size is not None else None
 
     @staticmethod
     def _highlighted_placeholders(
@@ -218,6 +432,7 @@ class GenerationService:
                 person.document_info.outgoing_date + timedelta(days=10)
             ).strftime("%d.%m.%Y"),
         }
+        replacements.update(person.investigator.replacements())
         for key, value in (overrides or {}).items():
             placeholder = key if key.startswith("{{") else "{{" + key + "}}"
             replacements[placeholder] = value
@@ -619,6 +834,14 @@ class GenerationService:
         highlighted_placeholders: frozenset[str] = frozenset(),
     ) -> None:
         for paragraph in container.paragraphs:
+            if (paragraph.text.strip() == "{{INVESTIGATOR_FORM_RANK_LABEL}}"
+                    and replacements.get("{{INVESTIGATOR_FORM_RANK_LABEL}}") == ""):
+                # Keep the mandatory paragraph inside its table cell.
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+                paragraph.paragraph_format.line_spacing = Pt(1)
+                for run in paragraph.runs:
+                    run.font.size = Pt(1)
             self._replace_in_paragraph(
                 paragraph,
                 replacements,
@@ -697,6 +920,14 @@ class GenerationService:
                     if replaced_run == run.text:
                         continue
                     run.text = replaced_run
+                    if placeholder in {"{{INVESTIGATOR_POSITION_FORM}}", "{{INVESTIGATOR_POSITION_TABLE}}"}:
+                        run.font.size = Pt(12)
+                        properties = run._element.get_or_add_rPr()
+                        complex_size = properties.find(qn("w:szCs"))
+                        if complex_size is None:
+                            complex_size = OxmlElement("w:szCs")
+                            properties.append(complex_size)
+                        complex_size.set(qn("w:val"), "24")
                     if placeholder == "{{RECIPIENT_HEADER}}":
                         GenerationService._format_recipient_run(run)
                     if placeholder in highlighted_placeholders:

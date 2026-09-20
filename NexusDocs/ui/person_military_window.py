@@ -75,7 +75,7 @@ class PersonMilitaryWindow(QDialog):
         )
 
         self.military_id_input.setPlaceholderText(
-            "Например: АБ1234567"
+            "Например: АБ-123456"
         )
 
         form_layout.addRow(
@@ -104,7 +104,7 @@ class PersonMilitaryWindow(QDialog):
         )
 
         form_layout.addRow(
-            "Военный билет:",
+            "Номер жетона:",
             self.military_id_input,
         )
 
@@ -245,7 +245,7 @@ class PersonMilitaryWindow(QDialog):
             QMessageBox.warning(
                 self,
                 "Ошибка",
-                "Введите номер военного билета.",
+                "Введите номер жетона.",
             )
             return
 

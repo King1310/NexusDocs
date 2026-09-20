@@ -79,6 +79,74 @@ def test_id_and_last_name_columns_sort_in_both_directions():
     ] == ["Яковлев", "Белов", "Алексеев"]
 
 
+def test_search_is_case_insensitive_and_supports_id_full_name_and_yo():
+    people = []
+    for person_id, full_name in (
+        (42, FullName("Иванов", "Илья", "Игоревич")),
+        (7, FullName("Семёнов", "Пётр", "Петрович")),
+        (15, FullName("Орлова", "Анна", "Сергеевна")),
+    ):
+        person = PersonFactory.create(person_id)
+        person.full_name = full_name
+        people.append(person)
+
+    class Repository:
+        @staticmethod
+        def get_all():
+            return list(people)
+
+    window = PersonListWindow(Repository())
+
+    for query, expected_ids in (
+        ("  иВаНоВ  ", [42]),
+        ("семенов", [7]),
+        ("ПЕТР   петрович", [7]),
+        ("иванов и.и.", [42]),
+        ("42", [42]),
+        ("7", [7]),
+        ("анна орлова", [15]),
+    ):
+        window.search_input.setText(query)
+        assert [
+            window.people_table.item(row, 0).data(
+                Qt.ItemDataRole.DisplayRole
+            )
+            for row in range(window.people_table.rowCount())
+        ] == expected_ids
+
+
+def test_corner_button_clears_search_and_sorting_without_a_label():
+    people = []
+    for person_id, last_name in ((9, "Яковлев"), (3, "Белов"), (6, "Орлов")):
+        person = PersonFactory.create(person_id)
+        person.full_name = FullName(last_name, "Иван", "Иванович")
+        people.append(person)
+
+    class Repository:
+        @staticmethod
+        def get_all():
+            return list(people)
+
+    window = PersonListWindow(Repository())
+    assert window.reset_filters_button is not None
+    assert window.reset_filters_button.text() == ""
+
+    window.search_input.setText("белов")
+    window.people_table.sortItems(1, Qt.SortOrder.DescendingOrder)
+    assert window.people_table.rowCount() == 1
+
+    window.reset_filters_button.click()
+
+    assert window.search_input.text() == ""
+    assert window.people_table.horizontalHeader().sortIndicatorSection() == -1
+    assert window.people_table.rowCount() == 3
+    assert [
+        window.people_table.item(row, 0).data(Qt.ItemDataRole.DisplayRole)
+        for row in range(window.people_table.rowCount())
+    ] == [9, 3, 6]
+    assert window.people_table.isSortingEnabled()
+
+
 def test_independent_people_window_uses_form_opener_callback():
     calls = []
     window = PersonListWindow(
@@ -100,6 +168,15 @@ def test_internal_header_status_has_readable_ui_label():
     assert PersonListWindow._verification_status_label("needs_review") == (
         "требует проверки"
     )
+
+
+def test_new_generation_never_reuses_reviewed_word_path(tmp_path):
+    reviewed = tmp_path / "комплект_с_подписью.docx"
+    reviewed.write_bytes(b"saved manual edits")
+    second = reviewed.with_name("комплект_с_подписью_2.docx")
+    second.write_bytes(b"another saved copy")
+    assert PersonListWindow._unused_document_path(reviewed).name == "комплект_с_подписью_3.docx"
+    assert reviewed.read_bytes() == b"saved manual edits"
 
 
 def test_extension_for_legacy_person_points_to_edit(monkeypatch):
@@ -140,5 +217,5 @@ def test_extension_for_legacy_person_points_to_edit(monkeypatch):
     message = warnings[0][2]
     assert "не все данные заполнены" in message
     assert "Дислокация в/части" in message
-    assert "Дата регистрации" in message
+    assert "Дата регистрации" not in message
     assert "Редактировать" in message

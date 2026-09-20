@@ -3,7 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from ui.main_window import APP_ICON_PATH, MainWindow
 
@@ -24,6 +24,19 @@ def test_main_window_has_icon_and_no_headers_database_button():
     assert window.people_button.text() == "База людей"
     assert window.extension_button.text() == "Сделать продление до 10 суток"
     assert window.dispatch_button.text() == "Отправка запросов"
+
+    visible_button_order = [
+        item.widget()
+        for index in range(window.centralWidget().layout().count())
+        if (item := window.centralWidget().layout().itemAt(index)).widget()
+        and isinstance(item.widget(), QPushButton)
+    ]
+    assert visible_button_order == [
+        window.new_request_button,
+        window.extension_button,
+        window.dispatch_button,
+        window.people_button,
+    ]
 
 
 def test_people_database_is_an_independent_top_level_window():

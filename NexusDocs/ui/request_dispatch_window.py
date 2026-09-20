@@ -22,6 +22,7 @@ from database.repositories.person_repository import PersonRepository
 from services.mail_service import OutlookDraftService
 from services.signed_scan_service import DispatchPackageStore, SignedScanService
 from services.word_bundle_service import WordBundleService
+from services.word_dispatch_service import WordDispatchService
 
 
 class _SplitScanWorker(QObject):
@@ -80,8 +81,33 @@ class _CreateDraftsWorker(QObject):
         self.finished.emit(package, drafts)
 
 
+class _PrepareWordWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, *, word_service, person, docx_path, output_directory):
+        super().__init__()
+        self.word_service = word_service
+        self.person = person
+        self.docx_path = docx_path
+        self.output_directory = output_directory
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.word_service.prepare(
+                person=self.person,
+                docx_path=self.docx_path,
+                output_directory=self.output_directory,
+            )
+        except Exception as error:
+            self.failed.emit(str(error))
+            return
+        self.finished.emit(result)
+
+
 class RequestDispatchWindow(QDialog):
-    """Split a signed scan and later create Outlook drafts from its package."""
+    """Prepare a reviewed Word or scan, then create Outlook drafts separately."""
 
     def __init__(
         self,
@@ -95,6 +121,7 @@ class RequestDispatchWindow(QDialog):
         self.signed_scan_service = SignedScanService(
             package_store=self.package_store
         )
+        self.word_dispatch_service = WordDispatchService(package_store=self.package_store)
         self.outlook_draft_service = OutlookDraftService()
         self._people_by_id = {}
         self._work_thread = None
@@ -121,7 +148,9 @@ class RequestDispatchWindow(QDialog):
         layout.addWidget(title)
 
         explanation = QLabel(
-            "Выберите человека и любой общий PDF с его запросами. "
+            "Сначала просмотрите Word-комплект, внесите правки и сохраните его. "
+            "Затем выберите этот Word или готовый PDF и нажмите кнопку подготовки. "
+            "Word будет преобразован в PDF и разбит целиком. "
             "Количество, повторы и порядок контейнеров не важны; запросы "
             "с другими исходящими номерами тоже будут разделены. После "
             "разбиения можно перенести всю созданную папку на компьютер "
@@ -130,7 +159,7 @@ class RequestDispatchWindow(QDialog):
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
 
-        split_title = QLabel("1. Разбить общий PDF")
+        split_title = QLabel("1. Подготовить отдельные PDF")
         split_title.setStyleSheet("font-weight: 600;")
         layout.addWidget(split_title)
 
@@ -141,19 +170,27 @@ class RequestDispatchWindow(QDialog):
         self.scan_input = QLineEdit()
         self.scan_input.setReadOnly(True)
         self.scan_input.setPlaceholderText(
-            "Выберите PDF с одним или несколькими запросами"
+            "Выберите проверенный и сохранённый Word или общий PDF"
         )
+        self.scan_input.textChanged.connect(self._source_changed)
         scan_row = QHBoxLayout()
         scan_row.addWidget(self.scan_input)
-        self.choose_scan_button = QPushButton("Выбрать PDF")
+        self.choose_scan_button = QPushButton("Выбрать Word / PDF")
         self.choose_scan_button.clicked.connect(self.choose_scan)
         scan_row.addWidget(self.choose_scan_button)
-        split_form.addRow("Подписанный PDF:", scan_row)
+        split_form.addRow("Проверенный файл:", scan_row)
         layout.addLayout(split_form)
 
         self.split_button = QPushButton("1. Разбить PDF")
         self.split_button.clicked.connect(self.split_scan)
         layout.addWidget(self.split_button)
+
+        review_note = QLabel(
+            "Для Word используются последние сохранённые изменения выбранного файла. "
+            "После создания комплекта преобразование само не запускается."
+        )
+        review_note.setWordWrap(True)
+        layout.addWidget(review_note)
 
         drafts_title = QLabel("2. Создать письма на компьютере с Outlook")
         drafts_title.setStyleSheet("font-weight: 600;")
@@ -203,12 +240,18 @@ class RequestDispatchWindow(QDialog):
         start_directory = self._selected_person_output_directory()
         selected, _ = QFileDialog.getOpenFileName(
             self,
-            "Выберите общий PDF с запросами",
+            "Выберите проверенный Word или общий PDF с запросами",
             str(start_directory),
-            "PDF (*.pdf)",
+            "Word и PDF (*.docx *.pdf);;Word (*.docx);;PDF (*.pdf)",
         )
         if selected:
             self.scan_input.setText(selected)
+
+    def _source_changed(self, value: str) -> None:
+        is_word = Path(value).suffix.casefold() == ".docx"
+        self.split_button.setText(
+            "1. Преобразовать Word и разбить PDF" if is_word else "1. Разбить PDF"
+        )
 
     def choose_package(self) -> None:
         current = Path(self.package_input.text().strip())
@@ -236,7 +279,7 @@ class RequestDispatchWindow(QDialog):
             QMessageBox.warning(
                 self,
                 "Не выбран человек",
-                "Выберите человека, для которого был распечатан комплект.",
+                "Выберите человека, для которого подготовлен комплект.",
             )
             return
 
@@ -248,16 +291,30 @@ class RequestDispatchWindow(QDialog):
                 return
 
         person_output = self._selected_person_output_directory()
+        output_directory = self.signed_scan_service.unique_output_directory(
+            person_output / "К отправке", scan_path.stem,
+        )
+        if scan_path.suffix.casefold() == ".docx":
+            worker = _PrepareWordWorker(
+                word_service=self.word_dispatch_service,
+                person=person,
+                docx_path=scan_path,
+                output_directory=output_directory,
+            )
+            self._start_worker(
+                worker,
+                completed=self._split_completed,
+                progress_text="Преобразую сохранённый Word в PDF и разделяю запросы…",
+                active_button=self.split_button,
+            )
+            return
+
         bundle_path = person_output / self.word_bundle_service.bundle_filename(
             person
         )
         if not bundle_path.is_file():
             bundle_path = None
 
-        output_directory = self.signed_scan_service.unique_output_directory(
-            person_output / "К отправке",
-            scan_path.stem,
-        )
         worker = _SplitScanWorker(
             scan_service=self.signed_scan_service,
             person=person,

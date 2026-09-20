@@ -4,6 +4,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.section import WD_SECTION
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -455,6 +456,107 @@ def test_dynamic_recipient_header_uses_tnr_and_keeps_template_size():
 
     assert paragraph.runs[0].font.name == "Times New Roman"
     assert paragraph.runs[0].font.size == Pt(13)
+
+
+def test_generation_matches_fixed_and_table_headers_to_inherited_body_size(tmp_path):
+    organization = Organization(
+        id=None,
+        organization_type=OrganizationType.HOSPITAL,
+        recipient="Главному врачу\nГБУЗ «Больница»",
+        postal_address="140100, Московская область, г. Раменское, ул. Мира, д. 12",
+    )
+    for body_size in (12, 13, 14):
+        template = Document()
+        template.styles["Normal"].font.size = Pt(11)
+        narrative_style = template.styles.add_style("Narrative", WD_STYLE_TYPE.PARAGRAPH)
+        narrative_style.font.size = Pt(body_size)
+        template.add_paragraph("Начальнику\nМУ МВД России «Власиха»")
+        template.add_paragraph("полковнику полиции\nВ.Н. Савкину")
+        template.add_paragraph("Московская область, п. Власиха, ул. Маршала Жукова, д. 42")
+        body = template.add_paragraph(
+            "В целях осуществления доследственной проверки прошу предоставить "
+            "необходимые сведения в отношении {{FULL_NAME}} по указанному адресу.",
+            style="Narrative",
+        )
+        body.runs[0].bold = True
+        table = template.add_table(rows=1, cols=1)
+        table.cell(0, 0).paragraphs[0].add_run("{{RECIPIENT_HEADER}}").font.size = Pt(16)
+        template_path = tmp_path / f"header_{body_size}.docx"
+        template.save(template_path)
+
+        output = GenerationService().generate(
+            PersonFactory.create(), organization, template_path, tmp_path / str(body_size)
+        )
+        generated = Document(output)
+        headers = generated.paragraphs[:3] + generated.tables[0].cell(0, 0).paragraphs
+        for paragraph in headers:
+            for run in paragraph.runs:
+                if run.text.strip():
+                    assert run.font.size == Pt(body_size)
+                    assert run.font.name == "Times New Roman"
+        assert generated.paragraphs[3].runs[0].bold is True
+
+
+def test_generation_removes_residence_clause_across_runs_without_losing_format(tmp_path):
+    template = Document()
+    for ending in ("ый", "ого", "ему"):
+        paragraph = template.add_paragraph()
+        paragraph.add_run(f"зарегистрированн{ending}").bold = True
+        paragraph.add_run(" и факти").italic = True
+        paragraph.add_run(f"чески проживающ{ending}")
+        paragraph.add_run(" по адресу: {{REGISTRATION_ADDRESS}}")
+    path = tmp_path / "registration.docx"
+    template.save(path)
+    organization = Organization(
+        id=None,
+        organization_type=OrganizationType.HOSPITAL,
+        recipient="Главному врачу",
+        postal_address="г. Раменское",
+    )
+
+    output = GenerationService().generate(
+        PersonFactory.create(), organization, path, tmp_path / "result"
+    )
+
+    generated = Document(output)
+    for ending, paragraph in zip(("ый", "ого", "ему"), generated.paragraphs, strict=True):
+        assert paragraph.text.startswith(f"зарегистрированн{ending} по адресу: ")
+        assert paragraph.runs[0].bold is True
+        assert "фактически" not in paragraph.text
+        assert "проживающ" not in paragraph.text
+
+
+def test_real_request_headers_match_their_body_font_and_use_registration_only(tmp_path):
+    template_dir = Path(__file__).resolve().parents[1] / "templates" / "requests"
+    organizations = [
+        Organization(
+            id=None, organization_type=organization_type,
+            recipient="Главному врачу\nГБУЗ «Районная больница»",
+            postal_address="140100, Московская область, г. Раменское, ул. Мира, д. 12",
+            phones=("+7 (495) 123-45-67",), email="test@example.ru",
+        )
+        for organization_type in {
+            request.organization_type for request in REQUEST_CATALOG
+            if request.organization_type is not None
+        }
+    ]
+    generated = GenerationService().generate_bundle(
+        PersonFactory.create(), organizations, template_dir, tmp_path / "bundle"
+    )
+    # Request forms 1–8 have 13 pt text; the remaining covers use 14 pt.
+    for number, path in enumerate(generated, 1):
+        document = Document(path)
+        expected = Pt(13 if number <= 8 else 14)
+        text = "".join(node.text or "" for node in document.element.body.iter(qn("w:t")))
+        assert "фактически проживающ" not in text
+        headers = GenerationService._recipient_paragraphs(document)
+        assert headers, path.name
+        for paragraph in headers:
+            for node in GenerationService._paragraph_text_nodes(paragraph):
+                if node.text and node.text.strip():
+                    size = node.getparent().find(qn("w:rPr")).find(qn("w:sz"))
+                    assert size is not None, (path.name, node.text)
+                    assert int(size.get(qn("w:val"))) == int(expected.pt * 2)
 
 
 def test_generation_uses_one_blank_line_before_contiguous_contacts():

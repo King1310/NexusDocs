@@ -55,10 +55,6 @@ class PersonSochWindow(QDialog):
             QDate.currentDate()
         )
 
-        self.registration_date_input = QDateEdit()
-        self.registration_date_input.setCalendarPopup(True)
-        self.registration_date_input.setDate(QDate.currentDate())
-
         self.circumstances_input = QComboBox()
         self.circumstances_input.addItems(
             [
@@ -109,11 +105,6 @@ class PersonSochWindow(QDialog):
         form_layout.addRow(
             "Дата СОЧ:",
             self.soch_date_input,
-        )
-
-        form_layout.addRow(
-            "Дата регистрации:",
-            self.registration_date_input,
         )
 
         form_layout.addRow(
@@ -184,14 +175,6 @@ class PersonSochWindow(QDialog):
                 soch_case.soch_date.day,
             )
         )
-        if soch_case.registration_date is not None:
-            self.registration_date_input.setDate(
-                QDate(
-                    soch_case.registration_date.year,
-                    soch_case.registration_date.month,
-                    soch_case.registration_date.day,
-                )
-            )
         if soch_case.circumstances:
             self.circumstances_input.setCurrentText(
                 soch_case.circumstances
@@ -280,12 +263,6 @@ class PersonSochWindow(QDialog):
             .toPython()
         )
 
-        registration_date = (
-            self.registration_date_input
-            .date()
-            .toPython()
-        )
-
         circumstances = (
             self.circumstances_input
             .currentText()
@@ -355,7 +332,12 @@ class PersonSochWindow(QDialog):
             case_number=case_number,
             procedural_control=procedural_control,
             article=article,
-            registration_date=registration_date,
+            # Keep old stored values intact; document dates come from DocumentInfo.
+            registration_date=(
+                self.form_data.soch_case.registration_date
+                if self.form_data.soch_case is not None
+                else None
+            ),
             circumstances=circumstances,
         )
 

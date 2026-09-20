@@ -10,6 +10,7 @@ from domain.value_objects.military import Military
 from domain.value_objects.passport import Passport
 from domain.value_objects.address import Address
 from domain.value_objects.soch_case import SochCase
+from domain.value_objects.investigator import Investigator, TSOMARTOV
 
 
 @dataclass(slots=True)
@@ -33,6 +34,7 @@ class Person(BaseEntity):
     soch_case: SochCase
 
     document_info: DocumentInfo
+    investigator: Investigator = TSOMARTOV
 
     def __str__(self) -> str:
         return (

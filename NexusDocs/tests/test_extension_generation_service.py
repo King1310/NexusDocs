@@ -43,9 +43,13 @@ def test_generates_extension_with_calculated_dates_and_no_times(tmp_path):
         soch_case=replace(
             person.soch_case,
             soch_date=date(2026, 8, 10),
-            registration_date=date(2026, 8, 17),
+            registration_date=date(2026, 7, 25),
             circumstances="Неявка в срок",
             article="ч. 2.1 ст. 337 УК РФ",
+        ),
+        document_info=replace(
+            person.document_info,
+            outgoing_date=date(2026, 8, 17),
         ),
     )
 
@@ -60,6 +64,7 @@ def test_generates_extension_with_calculated_dates_and_no_times(tmp_path):
     assert "17.08.2026" in text
     assert "19.08.2026" in text
     assert "26.08.2026" in text
+    assert "25.07.2026" not in text
     assert "по мобилизации в в/части 95375" in text
     assert "Иванова Ивана Ивановича" in text
     assert "старшины Иванова И.И." in text
@@ -109,6 +114,25 @@ def test_reports_all_new_fields_missing_for_legacy_person():
     assert ExtensionGenerationService.missing_fields(person) == (
         "Дислокация в/части",
         "Условия призыва",
-        "Дата регистрации",
         "Обстоятельства СОЧ",
     )
+
+
+def test_extension_dates_use_outgoing_date_for_legacy_person():
+    person = PersonFactory.create()
+    person = replace(
+        person,
+        soch_case=replace(person.soch_case, registration_date=None),
+        document_info=replace(
+            person.document_info,
+            outgoing_date=date(2026, 12, 30),
+        ),
+    )
+
+    replacements = ExtensionGenerationService._build_replacements(person)
+
+    assert ExtensionGenerationService.missing_fields(person) == ()
+    assert replacements["{{REGISTRATION_DATE}}"] == "30.12.2026"
+    assert replacements["{{THREE_DAY_DATE}}"] == "01.01.2027"
+    assert replacements["{{TEN_DAY_DATE}}"] == "08.01.2027"
+    assert "30.12.2026" in ExtensionGenerationService.filename(person)

@@ -30,6 +30,7 @@ class PersonService:
 
         person = Person(
             id=self.repository.get_next_id(),
+            investigator=form_data.investigator,
 
             full_name=form_data.full_name,
 
@@ -83,6 +84,7 @@ class PersonService:
 
         person = Person(
             id=person_id,
+            investigator=form_data.investigator,
 
             full_name=form_data.full_name,
 

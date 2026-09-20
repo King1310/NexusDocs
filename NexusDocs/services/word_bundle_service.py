@@ -60,7 +60,7 @@ class WordBundleService:
         return output_path
 
     @staticmethod
-    def bundle_filename(person: Person) -> str:
+    def bundle_filename(person: Person, *, signed: bool | None = None) -> str:
         base = (
             f"{person.full_name.last_name}"
             f"{person.full_name.first_name[:1]}"
@@ -68,6 +68,8 @@ class WordBundleService:
             f"{person.document_info.outgoing_date:%d.%m.%Y}_"
             "все_запросы"
         )
+        if signed is not None:
+            base += "_с_подписью" if signed else "_без_подписи"
         return re.sub(r'[<>:"/\\|?*]', "_", base) + ".docx"
 
     @classmethod

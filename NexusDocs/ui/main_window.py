@@ -18,6 +18,7 @@ from services.person_service import PersonService
 from ui.form_data import PersonFormData
 from ui.form_navigation import run_form_sequence
 from ui.person_window import PersonWindow
+from ui.person_investigator_window import PersonInvestigatorWindow
 from ui.person_passport_window import PersonPassportWindow
 from ui.person_birth_window import PersonBirthWindow
 from ui.person_registration_window import PersonRegistrationWindow
@@ -139,8 +140,8 @@ class MainWindow(QMainWindow):
         buttons = (
             self.new_request_button,
             self.extension_button,
-            self.people_button,
             self.dispatch_button,
+            self.people_button,
         )
 
         for button in buttons:
@@ -273,6 +274,7 @@ class MainWindow(QMainWindow):
             form_data = PersonFormData()
 
         form_steps = (
+            PersonInvestigatorWindow,
             PersonWindow,
             PersonPassportWindow,
             PersonBirthWindow,

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from domain.value_objects.fullname import FullName
 
 from ui.form_data import PersonFormData
+from ui.form_navigation import BACK_DIALOG_CODE
 
 
 class PersonWindow(QDialog):
@@ -90,6 +91,8 @@ class PersonWindow(QDialog):
         self.cancel_button = QPushButton(
             "Отмена"
         )
+        self.back_button = QPushButton("Назад")
+        self.back_button.clicked.connect(self.go_back)
 
         layout.addWidget(
             self.next_button
@@ -98,6 +101,15 @@ class PersonWindow(QDialog):
         layout.addWidget(
             self.cancel_button
         )
+        layout.addWidget(self.back_button)
+
+    def go_back(self) -> None:
+        self.form_data.full_name = FullName(
+            last_name=self.last_name_input.text().strip(),
+            first_name=self.first_name_input.text().strip(),
+            middle_name=self.middle_name_input.text().strip(),
+        )
+        self.done(BACK_DIALOG_CODE)
 
     def _load_form_data(self) -> None:
         """

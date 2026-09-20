@@ -10,6 +10,7 @@ from domain.value_objects.fullname import FullName
 from domain.value_objects.military import Military
 from domain.value_objects.passport import Passport
 from domain.value_objects.soch_case import SochCase
+from domain.value_objects.investigator import Investigator, TSOMARTOV
 
 
 @dataclass
@@ -31,6 +32,7 @@ class PersonFormData:
     soch_case: SochCase | None = None
 
     document_info: DocumentInfo | None = None
+    investigator: Investigator = TSOMARTOV
 
     @classmethod
     def from_person(
@@ -50,4 +52,5 @@ class PersonFormData:
             military=person.military,
             soch_case=person.soch_case,
             document_info=person.document_info,
+            investigator=person.investigator,
         )

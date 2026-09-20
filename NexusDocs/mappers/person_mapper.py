@@ -10,6 +10,7 @@ from domain.value_objects.fullname import FullName
 from domain.value_objects.military import Military
 from domain.value_objects.passport import Passport
 from domain.value_objects.soch_case import SochCase
+from domain.value_objects.investigator import investigator_from_key
 
 
 class PersonMapper:
@@ -25,6 +26,7 @@ class PersonMapper:
 
         record = {
             "id": person.id,
+            "investigator_key": person.investigator.key,
         }
 
         record.update(
@@ -98,6 +100,7 @@ class PersonMapper:
 
         return Person(
             id=data["id"],
+            investigator=investigator_from_key(data.get("investigator_key")),
 
             full_name=FullName(
                 last_name=data["last_name"],

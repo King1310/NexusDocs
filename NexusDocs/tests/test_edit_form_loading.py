@@ -4,7 +4,7 @@ from datetime import date
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
 from domain.value_objects.soch_case import SochCase
 from tests.factories.person_factory import PersonFactory
@@ -72,13 +72,21 @@ def test_military_window_loads_existing_data(form_data):
     assert window.rank_input.text() == "рядовой"
     assert window.position_input.text() == "стрелок"
     assert window.military_id_input.text() == "АБ1234567"
+    assert "Номер жетона:" in {
+        label.text() for label in window.findChildren(QLabel)
+    }
+    assert "Военный билет:" not in {
+        label.text() for label in window.findChildren(QLabel)
+    }
 
 
 def test_soch_window_loads_existing_data(form_data):
     window = PersonSochWindow(form_data)
 
     assert window.soch_date_input.date().toPython() == date(2026, 7, 20)
-    assert window.registration_date_input.date().toPython() == date(2026, 7, 25)
+    assert "Дата регистрации:" not in {
+        label.text() for label in window.findChildren(QLabel)
+    }
     assert window.circumstances_input.currentText() == (
         "Самовольное оставление части"
     )
@@ -124,6 +132,7 @@ def test_mp_case_hides_and_does_not_require_case_number(form_data, monkeypatch):
     assert form_data.soch_case is not None
     assert form_data.soch_case.case_type == "МП"
     assert form_data.soch_case.case_number is None
+    assert form_data.soch_case.registration_date == date(2026, 7, 25)
 
 
 def test_document_window_loads_existing_data(form_data):

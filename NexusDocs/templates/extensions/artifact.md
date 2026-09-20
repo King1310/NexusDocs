@@ -24,8 +24,8 @@
 - Service basis: exactly one of `по контракту` or `по мобилизации`.
 - SOCH: date, circumstance sentence, article.
 - Registration date: the date the report was registered.
-- Three-day document date: registration date plus two calendar days.
-- Ten-day deadline: registration date plus nine calendar days.
+- Three-day document date: outgoing document date plus two calendar days.
+- Ten-day deadline: outgoing document date plus nine calendar days.
 - The article value must be consistent on all three pages, including the instructions page.
 
 ## Fixed content
