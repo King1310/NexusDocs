@@ -1,8 +1,10 @@
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from types import SimpleNamespace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QHeaderView
 
@@ -171,12 +173,96 @@ def test_internal_header_status_has_readable_ui_label():
 
 
 def test_new_generation_never_reuses_reviewed_word_path(tmp_path):
-    reviewed = tmp_path / "комплект_с_подписью.docx"
+    reviewed = tmp_path / "комплект.docx"
     reviewed.write_bytes(b"saved manual edits")
-    second = reviewed.with_name("комплект_с_подписью_2.docx")
+    second = reviewed.with_name("комплект_2.docx")
     second.write_bytes(b"another saved copy")
-    assert PersonListWindow._unused_document_path(reviewed).name == "комплект_с_подписью_3.docx"
+    assert PersonListWindow._unused_document_path(reviewed).name == "комплект_3.docx"
     assert reviewed.read_bytes() == b"saved manual edits"
+
+
+def test_generation_creates_one_signed_word_and_no_unsigned_copy(tmp_path, monkeypatch):
+    person = PersonFactory.create(7)
+    project = tmp_path / "NexusDocs"
+    (project / "templates" / "requests").mkdir(parents=True)
+
+    class Repository:
+        @staticmethod
+        def get_all():
+            return [person]
+
+    class Generation:
+        @staticmethod
+        def generate_bundle(**kwargs):
+            return [tmp_path / "request.docx"]
+
+    class Bundles:
+        @staticmethod
+        def bundle_filename(selected):
+            assert selected is person
+            return "ИвановИИ_07.09.2026_все_запросы.docx"
+
+        @staticmethod
+        def create_editable_bundle(sources, destination):
+            destination.write_bytes(b"assembled")
+
+    signed_calls = []
+
+    class Signatures:
+        @staticmethod
+        def create_signed_copy(source, destination, investigator):
+            signed_calls.append((source, destination, investigator))
+            destination.write_bytes(b"signed")
+
+    class Extensions:
+        @staticmethod
+        def missing_fields(selected):
+            return ["not generated in this test"]
+
+    window = PersonListWindow(Repository())
+    window.generation_service = Generation()
+    window.word_bundle_service = Bundles()
+    window.document_signature_service = Signatures()
+    window.extension_generation_service = Extensions()
+    monkeypatch.setattr(window, "_get_selected_person", lambda: person)
+    monkeypatch.setattr(
+        window,
+        "_ensure_headers_ready",
+        lambda selected: SimpleNamespace(organizations=()),
+    )
+    monkeypatch.setattr(window, "_request_declension_overrides", lambda selected: {})
+    monkeypatch.setattr(window, "_project_directory", lambda: project)
+    monkeypatch.setattr(
+        window,
+        "_progress",
+        lambda message: SimpleNamespace(close=lambda: None),
+    )
+    monkeypatch.setattr(window, "_show_missing_extension_fields", lambda fields: None)
+    warnings = []
+    messages = []
+    opened = []
+    monkeypatch.setattr(
+        "ui.person.person_list_window.QMessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+    monkeypatch.setattr(
+        "ui.person.person_list_window.QMessageBox.information",
+        lambda *args: messages.append(args),
+    )
+    monkeypatch.setattr(
+        "ui.person.person_list_window.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()),
+    )
+
+    window.generate_documents()
+
+    expected = project / "output" / "7" / "ИвановИИ_07.09.2026_все_запросы.docx"
+    assert warnings == []
+    assert expected.read_bytes() == b"signed"
+    assert len(signed_calls) == 1
+    assert [Path(value) for value in opened] == [expected]
+    assert "один редактируемый комплект" in messages[0][2]
+    assert not list(expected.parent.glob("*_без_подписи.docx"))
 
 
 def test_extension_for_legacy_person_points_to_edit(monkeypatch):

@@ -34,25 +34,16 @@ def main():
         person, resolution.organizations, Path("templates/requests"),
         args.output / "individual",
     )
-    unsigned = args.output / "unsigned.docx"
-    signed = args.output / "signed.docx"
+    signed = args.output / WordBundleService.bundle_filename(person)
     assembled = args.output / "assembled.docx"
     WordBundleService().create_editable_bundle(paths, assembled)
-    removed = DocumentSignatureService().create_unsigned_copy(assembled, unsigned)
-    assert removed == 1, "Existing Agirov signature must be removed only from unsigned copy"
     count = DocumentSignatureService().create_signed_copy(assembled, signed, person.investigator)
-    print(f"Created two Word files; signatures: {count}", flush=True)
-    print(unsigned.resolve(), flush=True)
+    print(f"Created one signed Word file; signatures: {count}", flush=True)
     print(signed.resolve(), flush=True)
     if args.export:
-        exports = []
-        for path in (unsigned, signed):
-            work = args.output / ("export_" + path.stem)
-            work.mkdir(exist_ok=True)
-            exports.append(ReviewedWordConverter().convert(path, work))
-        assert [(r.first_page_index, r.page_count) for r in exports[0].requests] == [
-            (r.first_page_index, r.page_count) for r in exports[1].requests
-        ], "Signature changed pagination"
+        work = args.output / ("export_" + signed.stem)
+        work.mkdir(exist_ok=True)
+        exported = ReviewedWordConverter().convert(signed, work)
         # Simulate a saved manual correction in the generated document.
         reviewed = args.output / "reviewed.docx"
         document = Document(signed)
@@ -69,14 +60,14 @@ def main():
         )
         assert reviewed.read_bytes() == saved_bytes, "Conversion modified user's saved file"
         assert len(package.attachments) == 15
-        assert sum(item.page_count for item in package.attachments) == len(PdfReader(exports[1].pdf_path).pages)
+        assert sum(item.page_count for item in package.attachments) == len(PdfReader(exported.pdf_path).pages)
         for number in (5, 6, 7):
             attachment = next(item for item in package.attachments if item.container_number == number)
             assert attachment.recipient_email == "review-test@example.invalid", number
             pdf_text = "".join(page.extract_text() for page in PdfReader(attachment.path).pages)
             assert "review-test@example.invalid" in pdf_text, number
         assert all(item.recipient_email != "vso-2402@vso.rsnet.ru" for item in package.attachments)
-        print("Verified: same pagination, 15 PDFs, saved edits and recipient-only emails; no Outlook", flush=True)
+        print("Verified: one reviewed Word, 15 PDFs, saved edits and recipient-only emails; no Outlook", flush=True)
 
 
 if __name__ == "__main__":

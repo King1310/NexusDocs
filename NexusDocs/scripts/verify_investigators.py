@@ -47,7 +47,6 @@ def main():
         assembled = directory / "assembled.docx"
         WordBundleService().create_editable_bundle(paths, assembled)
         signatures = DocumentSignatureService()
-        signatures.create_unsigned_copy(assembled, directory / "unsigned.docx")
         count = signatures.create_signed_copy(assembled, directory / "signed.docx", profile)
         assert count == 18, (profile.key, count)
         ExtensionGenerationService().generate(person, ROOT / "templates/extensions/extension_to_10_days.docx", directory)

@@ -88,7 +88,7 @@ class DocumentSignatureService:
         investigator: "Investigator",
     ) -> int:
         if source.resolve() == destination.resolve():
-            raise ValueError("Комплекты с подписью и без неё должны быть разными файлами.")
+            raise ValueError("Исходный документ и итоговый комплект должны быть разными файлами.")
         signature_path = self._signature_path(investigator)
         if not signature_path.is_file():
             raise FileNotFoundError(
@@ -127,6 +127,8 @@ class DocumentSignatureService:
                 signature_path=signature_path,
                 signature_name=signature_name,
                 text_width=text_width,
+                compact=is_mvd_form,
+                crowded_position=investigator.key == "sarkisyan",
             )
             inserted += 1
 
@@ -147,6 +149,8 @@ class DocumentSignatureService:
         signature_path: Path,
         signature_name: str,
         text_width: int,
+        compact: bool = False,
+        crowded_position: bool = False,
     ) -> None:
         """Anchor the image to the signer's text without changing line height."""
         position = 0
@@ -170,11 +174,13 @@ class DocumentSignatureService:
             raise ValueError("Не удалось определить место подписи в строке.")
 
         framed = paragraph._p.find(qn("w:pPr") + "/" + qn("w:framePr")) is not None
-        width = Mm(16 if framed else 34)
+        compact = compact or framed
+        width = Mm(16 if compact else 34)
         picture_run = paragraph.add_run()
         shape = picture_run.add_picture(str(signature_path), width=width)
-        # Tall scans must fit the signing row, not overlap the position above.
-        max_height = Mm(10)
+        # The compact МВД forms have narrow signature fields. Ordinary request
+        # signatures must remain large enough to be clearly visible in print.
+        max_height = Mm(10 if compact else (18 if crowded_position else 20))
         if shape.height > max_height:
             shape.width = round(shape.width * max_height / shape.height)
             shape.height = max_height
@@ -194,9 +200,17 @@ class DocumentSignatureService:
         simple.set("y", "0")
         anchor.append(simple)
         for axis, relative, offset in (
-            ("H", "character" if framed else "margin",
-             int(Mm(36)) if framed else int(text_width - width - Mm(32))),
-            ("V", "line", -int(shape.height - Mm(3.5))),
+            ("H", "character" if compact else "margin",
+             int(Mm(36)) if compact else int(text_width - width - Mm(32))),
+            (
+                "V",
+                "line",
+                (
+                    -int(shape.height - Mm(3.5))
+                    if compact
+                    else -int(Mm(11 if crowded_position else 13))
+                ),
+            ),
         ):
             placement = OxmlElement(f"wp:position{axis}")
             placement.set("relativeFrom", relative)

@@ -992,7 +992,7 @@ class PersonListWindow(QDialog):
         if resolution is None:
             return
 
-        project_dir = Path(__file__).resolve().parents[2]
+        project_dir = self._project_directory()
         template_dir = project_dir / "templates" / "requests"
         output_dir = project_dir / "output" / str(person.id)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1009,16 +1009,12 @@ class PersonListWindow(QDialog):
         if overrides is None:
             return
 
-        progress = self._progress("Собираю Word-комплекты с подписью и без…")
+        progress = self._progress("Собираю общий Word с подписями…")
         bundle_path = output_dir / self.word_bundle_service.bundle_filename(
-            person, signed=False
-        )
-        signed_bundle_path = output_dir / self.word_bundle_service.bundle_filename(
-            person, signed=True
+            person
         )
         # A new generation must not overwrite a previously reviewed copy.
         bundle_path = self._unused_document_path(bundle_path)
-        signed_bundle_path = self._unused_document_path(signed_bundle_path)
         extension_path = None
         missing_extension_fields = self.extension_generation_service.missing_fields(
             person
@@ -1037,11 +1033,8 @@ class PersonListWindow(QDialog):
                 )
                 assembled_path = Path(temporary_dir) / "assembled.docx"
                 self.word_bundle_service.create_editable_bundle(generated, assembled_path)
-                self.document_signature_service.create_unsigned_copy(
-                    assembled_path, bundle_path
-                )
                 self.document_signature_service.create_signed_copy(
-                    assembled_path, signed_bundle_path, person.investigator
+                    assembled_path, bundle_path, person.investigator
                 )
             if not missing_extension_fields:
                 extension_path = self._create_extension_file(
@@ -1055,9 +1048,8 @@ class PersonListWindow(QDialog):
         progress.close()
 
         ready_message = (
-            "Созданы два редактируемых комплекта из 15 запросов.\n\n"
-            f"Без подписи — для печати и дела:\n{bundle_path}\n\n"
-            f"С подписью — для подготовки писем:\n{signed_bundle_path}"
+            "Создан один редактируемый комплект из 15 запросов с подписями.\n\n"
+            f"Файл для проверки, редактирования и печати:\n{bundle_path}"
         )
         if extension_path is not None:
             ready_message += (
@@ -1065,8 +1057,8 @@ class PersonListWindow(QDialog):
                 f"{extension_path}"
             )
         ready_message += (
-            "\n\nПроверьте и при необходимости отредактируйте оба Word-файла. "
-            "Сохраните правки. Затем выберите проверенный комплект с подписью "
+            "\n\nПроверьте и при необходимости отредактируйте этот Word-файл. "
+            "Сохраните правки. Затем выберите этот же проверенный комплект "
             "в окне «Отправка запросов», чтобы преобразовать его в PDF."
         )
         QMessageBox.information(
@@ -1074,7 +1066,7 @@ class PersonListWindow(QDialog):
             "Документы готовы",
             ready_message,
         )
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(signed_bundle_path)))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(bundle_path)))
         if extension_path is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(extension_path)))
         elif missing_extension_fields:
@@ -1088,6 +1080,10 @@ class PersonListWindow(QDialog):
             candidate = path.with_name(f"{path.stem}_{version}{path.suffix}")
             version += 1
         return candidate
+
+    @staticmethod
+    def _project_directory() -> Path:
+        return Path(__file__).resolve().parents[2]
 
     def generate_extension(self) -> Path | None:
         """Сформировать продление для выбранного человека."""

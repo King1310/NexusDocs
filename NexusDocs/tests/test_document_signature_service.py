@@ -52,8 +52,7 @@ def test_signature_copy_preserves_text_and_only_signs_investigator(tmp_path):
     anchors = list(result.element.body.iter(qn("wp:anchor")))
     assert len(anchors) == 1
     assert anchors[0].find(qn("wp:wrapNone")) is not None
-    # Tall signature scans must not overlap the printed position above.
-    assert int(anchors[0].find(qn("wp:extent")).get("cy")) <= Mm(10)
+    assert int(anchors[0].find(qn("wp:extent")).get("cy")) == Mm(20)
     assert anchors[0].find(qn("wp:positionH")).get("relativeFrom") == "margin"
     assert anchors[0].find(qn("wp:docPr")).get("descr") == (
         DocumentSignatureService.SIGNATURE_NAME_PREFIX + profile.key
@@ -122,13 +121,9 @@ def test_unsigned_copy_removes_generated_signature_for_any_investigator(tmp_path
     assert Document(unsigned).paragraphs[0].text == document.paragraphs[0].text
 
 
-def test_two_bundle_names_are_distinct_and_explicit():
+def test_bundle_has_one_canonical_filename():
     person = PersonFactory.create()
-    unsigned = WordBundleService.bundle_filename(person, signed=False)
-    signed = WordBundleService.bundle_filename(person, signed=True)
-    assert unsigned.endswith("_без_подписи.docx")
-    assert signed.endswith("_с_подписью.docx")
-    assert signed != unsigned
+    assert WordBundleService.bundle_filename(person).endswith("_все_запросы.docx")
 
 
 def test_mvd_form_without_rank_gets_signature_but_contact_name_does_not(tmp_path):
@@ -149,6 +144,8 @@ def test_mvd_form_without_rank_gets_signature_but_contact_name_does_not(tmp_path
     result = Document(destination)
     assert not list(result.paragraphs[0]._p.iter(qn("wp:anchor")))
     assert len(list(result.paragraphs[-1]._p.iter(qn("wp:anchor")))) == 1
+    extent = result.paragraphs[-1]._p.find(".//" + qn("wp:extent"))
+    assert int(extent.get("cy")) <= Mm(10)
 
 
 def test_unsigned_removes_agirov_signature_but_preserves_letterhead(tmp_path):
