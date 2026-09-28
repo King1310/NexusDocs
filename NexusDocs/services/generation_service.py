@@ -23,7 +23,9 @@ from lxml import etree
 from domain.entities.organization import Organization
 from domain.entities.person import Person
 from domain.enums.organization_type import OrganizationType
+from domain.enums.registration_mode import RegistrationMode
 from services.request_catalog import REQUEST_CATALOG, RequestTemplate
+from services.word_typography_service import protect_word_line_breaks
 from utils.declension import decline_full_name, rank_genitive
 
 
@@ -52,6 +54,7 @@ class GenerationService:
         output_path = output_dir / filename
         document.save(output_path)
         self._replace_in_package(output_path, replacements, highlighted)
+        protect_word_line_breaks(output_path)
         return output_path
 
     def generate_bundle(
@@ -99,6 +102,9 @@ class GenerationService:
         template_dir: Path,
         output_dir: Path,
         overrides: Mapping[str, str] | None = None,
+        *,
+        recipient_header_override: str | None = None,
+        registration_mode: RegistrationMode = RegistrationMode.FILLED,
     ) -> Path:
         template_path = template_dir / request.filename
         if not template_path.is_file():
@@ -106,7 +112,18 @@ class GenerationService:
 
         document = Document(template_path)
         self._prepare_template(document)
+        if recipient_header_override is not None:
+            self._replace_fixed_recipient_headers(
+                document,
+                recipient_header_override,
+            )
         replacements = self._build_replacements(person, organization, overrides)
+        if recipient_header_override is not None:
+            replacements["{{RECIPIENT_HEADER}}"] = (
+                self._normalize_recipient_override(recipient_header_override)
+            )
+        if registration_mode is RegistrationMode.LATER:
+            replacements.update(self._blank_registration_replacements())
         if request.number in {10, 11}:
             replacements["предварительного следствия"] = (
                 self._mvd_proceeding_stage(person)
@@ -117,12 +134,118 @@ class GenerationService:
             self._compact_header_gap(document)
         highlighted = self._highlighted_placeholders(organization)
         self._replace_in_container(document, replacements, highlighted)
+        if registration_mode is RegistrationMode.LATER:
+            self._remove_outgoing_footers(document)
 
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / self._build_request_filename(person, request)
         document.save(output_path)
         self._replace_in_package(output_path, replacements, highlighted)
+        protect_word_line_breaks(output_path)
         return output_path
+
+    @staticmethod
+    def _normalize_recipient_override(value: str) -> str:
+        """Keep a manually verified header verbatim apart from whitespace noise."""
+
+        lines = [line.rstrip() for line in value.replace("\r\n", "\n").split("\n")]
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        normalized: list[str] = []
+        blank = False
+        for line in lines:
+            if not line.strip():
+                if normalized and not blank:
+                    normalized.append("")
+                blank = True
+                continue
+            normalized.append(line.strip())
+            blank = False
+        return "\n".join(normalized)
+
+    @classmethod
+    def _replace_fixed_recipient_headers(
+        cls,
+        document: DocumentObject,
+        recipient_header: str,
+    ) -> None:
+        """Replace every fixed addressee block while keeping all template pages.
+
+        Dynamic templates retain ``{{RECIPIENT_HEADER}}`` and are handled by the
+        normal placeholder pass.  Some fixed templates (notably ЗАГС) repeat the
+        addressee on more than one page, so each detected block is replaced.
+        """
+
+        replacement = cls._normalize_recipient_override(recipient_header)
+        if not replacement:
+            raise ValueError("Шапка уникального запроса не может быть пустой.")
+
+        for group in cls._recipient_paragraph_groups(document):
+            if any(
+                "{{RECIPIENT_HEADER}}" in cls._paragraph_visible_text(paragraph)
+                for paragraph in group
+            ):
+                continue
+            first = Paragraph(group[0], document)
+            if first.runs:
+                first_run = first.runs[0]
+                first_run.text = replacement
+                for run in first.runs[1:]:
+                    run.text = ""
+            else:
+                first_run = first.add_run(replacement)
+            cls._format_recipient_run(first_run)
+            first_run.font.highlight_color = None
+            for paragraph in group[1:]:
+                parent = paragraph.getparent()
+                if parent is not None:
+                    parent.remove(paragraph)
+        cls._clear_personal_salutations(document)
+
+    @classmethod
+    def _clear_personal_salutations(cls, document: DocumentObject) -> None:
+        """Do not keep the previous addressee's name after a header change."""
+
+        pattern = re.compile(r"^Уважаем(?:ый|ая|ые)\b", re.IGNORECASE)
+        for element in document.element.body.iter(qn("w:p")):
+            if list(element.iterancestors(qn("w:txbxContent"))):
+                continue
+            paragraph = Paragraph(element, document)
+            if not pattern.match(paragraph.text.strip()):
+                continue
+            for run in paragraph.runs:
+                run.text = ""
+
+    @staticmethod
+    def _blank_registration_replacements() -> dict[str, str]:
+        """Visible blank lines for fields that will be registered in Word later."""
+
+        # Non-breaking spaces keep the underlining authored around/under these
+        # placeholders visible in Word instead of collapsing an empty run.
+        return {
+            "{{OUTGOING_DATE}}": "\u00a0" * 10,
+            "{{OUTGOING_NUMBER}}": "\u00a0" * 10,
+            "{{RESPONSE_DEADLINE}}": "\u00a0" * 10,
+        }
+
+    @staticmethod
+    def _remove_outgoing_footers(document: DocumentObject) -> None:
+        """Remove the complete outgoing block from every document section."""
+
+        seen: set[int] = set()
+        for section in document.sections:
+            footer = section.footer
+            footer.is_linked_to_previous = False
+            element = footer._element
+            marker = id(element)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            for child in list(element):
+                element.remove(child)
+            element.append(OxmlElement("w:p"))
 
     @classmethod
     def _prepare_template(cls, document: DocumentObject) -> None:
@@ -271,6 +394,14 @@ class GenerationService:
 
     @classmethod
     def _recipient_paragraphs(cls, document: DocumentObject) -> list:
+        return [
+            paragraph
+            for group in cls._recipient_paragraph_groups(document)
+            for paragraph in group
+        ]
+
+    @classmethod
+    def _recipient_paragraph_groups(cls, document: DocumentObject) -> list[list]:
         recipient_start = re.compile(
             r"^(?:Командиру|Заведующей|Заведующему|Военному\s+комиссару|"
             r"Военному\s+коменданту|Главному\s+врачу|Директору|Руководителю|"
@@ -280,7 +411,8 @@ class GenerationService:
             r"^(?:В\s+(?:производстве|военном|связи|целях)|Уважаем|"
             r"ЗАПРОС\b|Запрос\b|Руководствуясь|Социально-демографические)"
         )
-        result = []
+        result: list[list] = []
+        current: list = []
         in_recipient = False
         for paragraph in document.element.body.iter(qn("w:p")):
             text = cls._paragraph_visible_text(paragraph).strip()
@@ -288,15 +420,25 @@ class GenerationService:
             if list(paragraph.iterancestors(qn("w:txbxContent"))) and not is_dynamic:
                 continue
             if is_dynamic:
-                result.append(paragraph)
+                if current:
+                    result.append(current)
+                    current = []
+                result.append([paragraph])
                 in_recipient = False
             elif recipient_start.match(text):
-                result.append(paragraph)
+                if current:
+                    result.append(current)
+                current = [paragraph]
                 in_recipient = True
             elif in_recipient and body_start.match(text):
+                if current:
+                    result.append(current)
+                    current = []
                 in_recipient = False
             elif in_recipient and text:
-                result.append(paragraph)
+                current.append(paragraph)
+        if current:
+            result.append(current)
         return result
 
     @classmethod

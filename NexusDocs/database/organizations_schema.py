@@ -42,6 +42,26 @@ def create_organizations_tables(database_file: Path | None = None) -> None:
             FOREIGN KEY (territory_id) REFERENCES territories(id) ON DELETE CASCADE,
             FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS custom_recipients
+        (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_slug TEXT NOT NULL,
+            lookup_name TEXT NOT NULL,
+            lookup_name_normalized TEXT NOT NULL,
+            recipient TEXT NOT NULL,
+            postal_address TEXT NOT NULL,
+            phones TEXT NOT NULL DEFAULT '[]',
+            email TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            verification_status TEXT NOT NULL DEFAULT 'unverified',
+            verified_at TEXT NOT NULL DEFAULT '',
+            verification_note TEXT NOT NULL DEFAULT '',
+            UNIQUE(template_slug, lookup_name_normalized)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_custom_recipients_template_name
+        ON custom_recipients(template_slug, lookup_name_normalized);
         """
     )
 

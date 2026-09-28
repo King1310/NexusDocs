@@ -26,7 +26,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def document_text(path):
-    return "\n".join("".join(p.itertext()) for p in Document(path).element.body.iter(qn("w:t")))
+    return "\n".join(
+        "".join(p.itertext()) for p in Document(path).element.body.iter(qn("w:t"))
+    ).replace("\u00a0", " ")
 
 
 def test_executor_survives_create_reload_and_edit():
@@ -79,7 +81,9 @@ def test_every_template_uses_selected_executor(tmp_path, profile):
                 assert other.surname_initials not in text
         if request.number == 9:
             doc = Document(path)
-            table_text = " ".join(t.text or "" for table in doc.tables for t in table._tbl.iter(qn("w:t")))
+            table_text = " ".join(
+                t.text or "" for table in doc.tables for t in table._tbl.iter(qn("w:t"))
+            ).replace("\u00a0", " ")
             assert profile.position_table in table_text
             assert profile.table_name in table_text
         if request.number == 11 and profile != TSOMARTOV:
@@ -90,6 +94,7 @@ def test_every_template_uses_selected_executor(tmp_path, profile):
     text = document_text(extension)
     assert "{{INVESTIGATOR" not in text
     assert profile.initials_surname in text
-    assert "Саркисяна А.К." in text  # Fixed report author, not executor.
+    assert "собственный рапорт об обнаружении" in text
+    assert "Саркисяна А.К." not in text
     if profile != TSOMARTOV:
         assert "Цомартов" not in text

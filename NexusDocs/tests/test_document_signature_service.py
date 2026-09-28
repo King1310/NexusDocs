@@ -52,8 +52,16 @@ def test_signature_copy_preserves_text_and_only_signs_investigator(tmp_path):
     anchors = list(result.element.body.iter(qn("wp:anchor")))
     assert len(anchors) == 1
     assert anchors[0].find(qn("wp:wrapNone")) is not None
-    assert int(anchors[0].find(qn("wp:extent")).get("cy")) == Mm(20)
+    assert int(anchors[0].find(qn("wp:extent")).get("cy")) == Mm(23)
     assert anchors[0].find(qn("wp:positionH")).get("relativeFrom") == "margin"
+    text_width = (
+        result.sections[0].page_width
+        - result.sections[0].left_margin
+        - result.sections[0].right_margin
+    )
+    signature_width = int(anchors[0].find(qn("wp:extent")).get("cx"))
+    horizontal_offset = int(anchors[0].find(qn("wp:positionH"))[0].text)
+    assert horizontal_offset + signature_width == text_width - Mm(37)
     assert anchors[0].find(qn("wp:docPr")).get("descr") == (
         DocumentSignatureService.SIGNATURE_NAME_PREFIX + profile.key
     )
@@ -100,6 +108,38 @@ def test_selected_investigator_resolves_own_asset_from_directory(tmp_path):
     with ZipFile(signed) as package:
         embedded = package.read("word/media/image1.png")
     assert embedded == expected_asset
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_height", "expected_vertical_offset"),
+    [
+        (investigator("tsomartov", "С.А. Цомартов", "tsomartov_sa.png"), 23, 15),
+        (investigator("sarkisyan", "А.К. Саркисян", "sarkisyan_ak.png"), 21, 13),
+    ],
+)
+def test_regular_signatures_are_larger_and_clear_of_name(
+    tmp_path, profile, expected_height, expected_vertical_offset,
+):
+    source = tmp_path / "source.docx"
+    signed = tmp_path / "signed.docx"
+    document = Document()
+    document.add_paragraph(f"подполковник юстиции\t{profile.initials_surname}")
+    document.save(source)
+
+    assert DocumentSignatureService().create_signed_copy(source, signed, profile) == 1
+    result = Document(signed)
+    anchor = next(result.element.body.iter(qn("wp:anchor")))
+    extent = anchor.find(qn("wp:extent"))
+    horizontal_offset = int(anchor.find(qn("wp:positionH"))[0].text)
+    vertical_offset = int(anchor.find(qn("wp:positionV"))[0].text)
+    usable_width = (
+        result.sections[0].page_width
+        - result.sections[0].left_margin
+        - result.sections[0].right_margin
+    )
+    assert int(extent.get("cy")) == Mm(expected_height)
+    assert horizontal_offset + int(extent.get("cx")) == usable_width - Mm(37)
+    assert vertical_offset == -Mm(expected_vertical_offset)
 
 
 def test_unsigned_copy_removes_generated_signature_for_any_investigator(tmp_path):

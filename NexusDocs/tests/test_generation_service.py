@@ -282,7 +282,7 @@ def test_ud_phrase_is_applied_to_every_real_request_template(tmp_path):
             for node in document.element.body.iter()
             if node.tag.endswith("}t")
         ))
-    combined = "\n".join(texts)
+    combined = "\n".join(texts).replace("\u00a0", " ")
     expected = "находится уголовное дело № 1.26.0200.2402.000152"
     assert "находятся материалы проверки" not in combined
     assert combined.count(expected) == 15
@@ -520,7 +520,9 @@ def test_generation_removes_residence_clause_across_runs_without_losing_format(t
 
     generated = Document(output)
     for ending, paragraph in zip(("ый", "ого", "ему"), generated.paragraphs, strict=True):
-        assert paragraph.text.startswith(f"зарегистрированн{ending} по адресу: ")
+        assert paragraph.text.replace("\u00a0", " ").startswith(
+            f"зарегистрированн{ending} по адресу: "
+        )
         assert paragraph.runs[0].bold is True
         assert "фактически" not in paragraph.text
         assert "проживающ" not in paragraph.text

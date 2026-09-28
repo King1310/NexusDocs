@@ -15,3 +15,11 @@ def test_declines_common_male_full_name():
 
 def test_declines_compound_rank():
     assert rank_genitive("старший лейтенант") == "старшего лейтенанта"
+
+
+def test_declines_dmitry_as_a_name_not_as_an_adjective():
+    declined = decline_full_name(
+        FullName("Кошляков", "Дмитрий", "Владимирович")
+    )
+
+    assert declined.first_name_genitive == "Дмитрия"

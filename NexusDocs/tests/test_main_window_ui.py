@@ -21,6 +21,8 @@ def test_main_window_has_icon_and_no_headers_database_button():
     assert not window.windowIcon().isNull()
     assert not hasattr(window, "settings_button")
     assert window.new_request_button.text() == "Новый запрос"
+    assert window.unique_request_button.text() == "Создать уникальный запрос"
+    assert window.control_production_button.text() == "Создать комплект КП"
     assert window.people_button.text() == "База людей"
     assert window.extension_button.text() == "Сделать продление до 10 суток"
     assert window.dispatch_button.text() == "Отправка запросов"
@@ -33,6 +35,8 @@ def test_main_window_has_icon_and_no_headers_database_button():
     ]
     assert visible_button_order == [
         window.new_request_button,
+        window.unique_request_button,
+        window.control_production_button,
         window.extension_button,
         window.dispatch_button,
         window.people_button,
@@ -71,4 +75,21 @@ def test_request_dispatch_is_an_independent_top_level_window():
     assert main_window.request_dispatch_window.parent() is None
     assert main_window.request_dispatch_window.isWindow()
     main_window.request_dispatch_window.close()
+    main_window.close()
+
+
+def test_unique_request_is_an_independent_top_level_window():
+    class EmptyRepository:
+        @staticmethod
+        def get_all():
+            return []
+
+    main_window = MainWindow()
+    main_window.person_repository = EmptyRepository()
+
+    main_window.open_unique_request()
+
+    assert main_window.unique_request_dialog.parent() is None
+    assert main_window.unique_request_dialog.isWindow()
+    main_window.unique_request_dialog.close()
     main_window.close()

@@ -27,6 +27,8 @@ from ui.person_soch_window import PersonSochWindow
 from ui.person_document_window import PersonDocumentWindow
 from ui.person.person_list_window import PersonListWindow
 from ui.request_dispatch_window import RequestDispatchWindow
+from ui.unique_request_dialog import UniqueRequestDialog
+from ui.control_production_dialog import ControlProductionDialog
 from ui.styles import MAIN_WINDOW_STYLE
 
 
@@ -60,6 +62,8 @@ class MainWindow(QMainWindow):
 
         self.person_list_window = None
         self.request_dispatch_window = None
+        self.unique_request_dialog = None
+        self.control_production_dialog = None
 
     def _setup_ui(self) -> None:
         """
@@ -129,9 +133,15 @@ class MainWindow(QMainWindow):
             "База людей"
         )
 
+        self.unique_request_button = QPushButton(
+            "Создать уникальный запрос"
+        )
+
         self.extension_button = QPushButton(
             "Сделать продление до 10 суток"
         )
+
+        self.control_production_button = QPushButton("Создать комплект КП")
 
         self.dispatch_button = QPushButton(
             "Отправка запросов"
@@ -139,6 +149,8 @@ class MainWindow(QMainWindow):
 
         buttons = (
             self.new_request_button,
+            self.unique_request_button,
+            self.control_production_button,
             self.extension_button,
             self.dispatch_button,
             self.people_button,
@@ -179,6 +191,12 @@ class MainWindow(QMainWindow):
             self.open_people_database
         )
 
+        self.unique_request_button.clicked.connect(
+            self.open_unique_request
+        )
+
+        self.control_production_button.clicked.connect(self.open_control_production)
+
         self.extension_button.clicked.connect(
             self.open_extension_person_picker
         )
@@ -186,6 +204,33 @@ class MainWindow(QMainWindow):
         self.dispatch_button.clicked.connect(
             self.open_request_dispatch
         )
+
+    def open_control_production(self) -> None:
+        """Создать полный комплект КП, не изменяя карточку человека."""
+        if self.control_production_dialog is None or not self.control_production_dialog.isVisible():
+            self.control_production_dialog = ControlProductionDialog(
+                person_repository=self.person_repository, parent=None,
+            )
+            self.control_production_dialog.show()
+        else:
+            self.control_production_dialog.activateWindow()
+            self.control_production_dialog.raise_()
+
+    def open_unique_request(self) -> None:
+        """Открыть независимый мастер создания одного запроса."""
+
+        if (
+            self.unique_request_dialog is None
+            or not self.unique_request_dialog.isVisible()
+        ):
+            self.unique_request_dialog = UniqueRequestDialog(
+                person_repository=self.person_repository,
+                parent=None,
+            )
+            self.unique_request_dialog.show()
+        else:
+            self.unique_request_dialog.activateWindow()
+            self.unique_request_dialog.raise_()
 
     def open_request_dispatch(self) -> None:
         """Открыть независимое окно разбиения PDF и подготовки писем."""

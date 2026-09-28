@@ -19,7 +19,12 @@ def _replace_ending(value: str, ending: str, replacement: str) -> str:
 
 def _genitive(value: str, *, female: bool = False) -> str:
     lower = value.lower()
-    specials = {"павел": "Павла", "лев": "Льва", "илья": "Ильи"}
+    specials = {
+        "павел": "Павла",
+        "лев": "Льва",
+        "илья": "Ильи",
+        "дмитрий": "Дмитрия",
+    }
     if lower in specials:
         result = specials[lower]
         return result if value[:1].isupper() else result.lower()

@@ -175,12 +175,12 @@ class DocumentSignatureService:
 
         framed = paragraph._p.find(qn("w:pPr") + "/" + qn("w:framePr")) is not None
         compact = compact or framed
-        width = Mm(16 if compact else 34)
+        width = Mm(16 if compact else 39)
         picture_run = paragraph.add_run()
         shape = picture_run.add_picture(str(signature_path), width=width)
         # The compact МВД forms have narrow signature fields. Ordinary request
         # signatures must remain large enough to be clearly visible in print.
-        max_height = Mm(10 if compact else (18 if crowded_position else 20))
+        max_height = Mm(10 if compact else (21 if crowded_position else 23))
         if shape.height > max_height:
             shape.width = round(shape.width * max_height / shape.height)
             shape.height = max_height
@@ -201,14 +201,14 @@ class DocumentSignatureService:
         anchor.append(simple)
         for axis, relative, offset in (
             ("H", "character" if compact else "margin",
-             int(Mm(36)) if compact else int(text_width - width - Mm(32))),
+             int(Mm(36)) if compact else int(text_width - width - Mm(37))),
             (
                 "V",
                 "line",
                 (
                     -int(shape.height - Mm(3.5))
                     if compact
-                    else -int(Mm(11 if crowded_position else 13))
+                    else -int(Mm(13 if crowded_position else 15))
                 ),
             ),
         ):

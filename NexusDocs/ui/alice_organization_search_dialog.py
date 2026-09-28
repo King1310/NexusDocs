@@ -43,9 +43,12 @@ class GoogleOrganizationSearchDialog(QDialog):
         request: GoogleSearchRequest | None = None,
         response_parser=None,
         result_description: str = "все девять шапок",
+        service=None,
+        window_title: str = "Поиск девяти шапок через Google AI",
+        collect_button_text: str = "Забрать готовые шапки",
     ):
         super().__init__(parent)
-        self.service = GoogleOrganizationSearchService()
+        self.service = service or GoogleOrganizationSearchService()
         self.request = request or self.service.build_request(address)
         self.response_parser = response_parser or self.service.parse_response
         self.result_description = result_description
@@ -57,7 +60,7 @@ class GoogleOrganizationSearchDialog(QDialog):
         self._stable_poll_count = 0
         self._tagged_blocks: dict[int, str] = {}
 
-        self.setWindowTitle("Поиск девяти шапок через Google AI")
+        self.setWindowTitle(window_title)
         self.resize(1180, 780)
         self.setMinimumSize(900, 620)
 
@@ -78,7 +81,7 @@ class GoogleOrganizationSearchDialog(QDialog):
         buttons = QHBoxLayout()
         self.copy_button = QPushButton("Скопировать строгий запрос")
         self.retry_button = QPushButton("Отправить заново")
-        self.collect_button = QPushButton("Забрать готовые шапки")
+        self.collect_button = QPushButton(collect_button_text)
         self.cancel_button = QPushButton("Отмена")
         buttons.addWidget(self.copy_button)
         buttons.addWidget(self.retry_button)
@@ -353,7 +356,10 @@ class GoogleOrganizationSearchDialog(QDialog):
             state["remaining"] -= 1
             if state["remaining"] != 0:
                 return
-            combined = self._merge_frame_payloads(state["payloads"])
+            combined = self._merge_frame_payloads(
+                state["payloads"],
+                self._payload_text_score,
+            )
             if force:
                 clipboard_text = QGuiApplication.clipboard().text().strip()
                 if (
@@ -381,7 +387,7 @@ class GoogleOrganizationSearchDialog(QDialog):
         )
 
     @staticmethod
-    def _merge_frame_payloads(payloads) -> dict:
+    def _merge_frame_payloads(payloads, scorer=None) -> dict:
         """Combine visible text collected from the Google AI page."""
 
         texts: list[str] = []
@@ -409,7 +415,9 @@ class GoogleOrganizationSearchDialog(QDialog):
                     texts.append(candidate)
             if isinstance(text, str) and text.strip() and text not in texts:
                 texts.append(text)
-        texts.sort(key=GoogleOrganizationSearchDialog._payload_text_score)
+        texts.sort(
+            key=scorer or GoogleOrganizationSearchDialog._default_payload_text_score
+        )
         return {
             "text": texts[-1] if texts else "",
             "candidate_texts": texts,
@@ -418,8 +426,14 @@ class GoogleOrganizationSearchDialog(QDialog):
             "error": "; ".join(errors) if not texts else "",
         }
 
+    def _payload_text_score(self, value: str) -> tuple[int, int, int, int, int]:
+        base = self._default_payload_text_score(value)
+        return (int(self.service.has_completed_answer(value)), *base[1:])
+
     @staticmethod
-    def _payload_text_score(value: str) -> tuple[int, int, int, int, int]:
+    def _default_payload_text_score(
+        value: str,
+    ) -> tuple[int, int, int, int, int]:
         numbers = {
             int(match.group(1))
             for match in re.finditer(
